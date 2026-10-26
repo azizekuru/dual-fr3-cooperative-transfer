@@ -1,0 +1,42 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <model name="table">
+    <static>true</static>
+    <link name="link">
+      <!-- Masa Üstü Tablası (0.6m genişlik, 0.8m derinlik, 0.4m yükseklik) -->
+      <collision name="surface">
+        <pose>0 0 0.38 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.8 0.6 0.04</size>
+          </box>
+        </geometry>
+      </collision>
+      <visual name="visual_surface">
+        <pose>0 0 0.38 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.8 0.6 0.04</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.82 0.68 0.5 1</ambient>
+          <diffuse>0.82 0.68 0.5 1</diffuse>
+        </material>
+      </visual>
+
+      <!-- Ayaklar -->
+      <collision name="leg1"><pose>0.35 0.25 0.18 0 0 0</pose><geometry><cylinder><radius>0.02</radius><length>0.36</length></cylinder></geometry></collision>
+      <visual name="leg1_vis"><pose>0.35 0.25 0.18 0 0 0</pose><geometry><cylinder><radius>0.02</radius><length>0.36</length></cylinder></geometry><material><ambient>0.2 0.2 0.2 1</ambient></material></visual>
+
+      <collision name="leg2"><pose>-0.35 0.25 0.18 0 0 0</pose><geometry><cylinder><radius>0.02</radius><length>0.36</length></cylinder></geometry></collision>
+      <visual name="leg2_vis"><pose>-0.35 0.25 0.18 0 0 0</pose><geometry><cylinder><radius>0.02</radius><length>0.36</length></cylinder></geometry><material><ambient>0.2 0.2 0.2 1</ambient></material></visual>
+
+      <collision name="leg3"><pose>0.35 -0.25 0.18 0 0 0</pose><geometry><cylinder><radius>0.02</radius><length>0.36</length></cylinder></geometry></collision>
+      <visual name="leg3_vis"><pose>0.35 -0.25 0.18 0 0 0</pose><geometry><cylinder><radius>0.02</radius><length>0.36</length></cylinder></geometry><material><ambient>0.2 0.2 0.2 1</ambient></material></visual>
+
+      <collision name="leg4"><pose>-0.35 -0.25 0.18 0 0 0</pose><geometry><cylinder><radius>0.02</radius><length>0.36</length></cylinder></geometry></collision>
+      <visual name="leg4_vis"><pose>-0.35 -0.25 0.18 0 0 0</pose><geometry><cylinder><radius>0.02</radius><length>0.36</length></cylinder></geometry><material><ambient>0.2 0.2 0.2 1</ambient></material></visual>
+    </link>
+  </model>
+</sdf>

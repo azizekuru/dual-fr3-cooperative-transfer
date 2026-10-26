@@ -1,0 +1,36 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <model name="shelf">
+    <static>true</static>
+    <link name="link">
+      <!-- 4 Dikey Metal Direk (Yükseklik: 1.2m, Koyu Gri/Siyah Profil) -->
+      <visual name="post_fl"><pose>0.25 0.18 0.6 0 0 0</pose><geometry><box><size>0.04 0.04 1.2</size></box></geometry><material><ambient>0.2 0.22 0.25 1</ambient><diffuse>0.2 0.22 0.25 1</diffuse></material></visual>
+      <collision name="post_fl_col"><pose>0.25 0.18 0.6 0 0 0</pose><geometry><box><size>0.04 0.04 1.2</size></box></geometry></collision>
+
+      <visual name="post_fr"><pose>0.25 -0.18 0.6 0 0 0</pose><geometry><box><size>0.04 0.04 1.2</size></box></geometry><material><ambient>0.2 0.22 0.25 1</ambient><diffuse>0.2 0.22 0.25 1</diffuse></material></visual>
+      <collision name="post_fr_col"><pose>0.25 -0.18 0.6 0 0 0</pose><geometry><box><size>0.04 0.04 1.2</size></box></geometry></collision>
+
+      <visual name="post_bl"><pose>-0.25 0.18 0.6 0 0 0</pose><geometry><box><size>0.04 0.04 1.2</size></box></geometry><material><ambient>0.2 0.22 0.25 1</ambient><diffuse>0.2 0.22 0.25 1</diffuse></material></visual>
+      <collision name="post_bl_col"><pose>-0.25 0.18 0.6 0 0 0</pose><geometry><box><size>0.04 0.04 1.2</size></box></geometry></collision>
+
+      <visual name="post_br"><pose>-0.25 -0.18 0.6 0 0 0</pose><geometry><box><size>0.04 0.04 1.2</size></box></geometry><material><ambient>0.2 0.22 0.25 1</ambient><diffuse>0.2 0.22 0.25 1</diffuse></material></visual>
+      <collision name="post_br_col"><pose>-0.25 -0.18 0.6 0 0 0</pose><geometry><box><size>0.04 0.04 1.2</size></box></geometry></collision>
+
+      <!-- 1. Kat (Alt Raf - z=0.08m) -->
+      <visual name="shelf_layer_1"><pose>0 0 0.08 0 0 0</pose><geometry><box><size>0.5 0.38 0.025</size></box></geometry><material><ambient>0.82 0.6 0.35 1</ambient><diffuse>0.82 0.6 0.35 1</diffuse></material></visual>
+      <collision name="shelf_layer_1_col"><pose>0 0 0.08 0 0 0</pose><geometry><box><size>0.5 0.38 0.025</size></box></geometry></collision>
+
+      <!-- 2. Kat (Çalışma / Alma Katı - z=0.45m) -->
+      <visual name="shelf_layer_2"><pose>0 0 0.45 0 0 0</pose><geometry><box><size>0.5 0.38 0.025</size></box></geometry><material><ambient>0.82 0.6 0.35 1</ambient><diffuse>0.82 0.6 0.35 1</diffuse></material></visual>
+      <collision name="shelf_layer_2_col"><pose>0 0 0.45 0 0 0</pose><geometry><box><size>0.5 0.38 0.025</size></box></geometry></collision>
+
+      <!-- 3. Kat (Orta Raf - z=0.80m) -->
+      <visual name="shelf_layer_3"><pose>0 0 0.80 0 0 0</pose><geometry><box><size>0.5 0.38 0.025</size></box></geometry><material><ambient>0.82 0.6 0.35 1</ambient><diffuse>0.82 0.6 0.35 1</diffuse></material></visual>
+      <collision name="shelf_layer_3_col"><pose>0 0 0.80 0 0 0</pose><geometry><box><size>0.5 0.38 0.025</size></box></geometry></collision>
+
+      <!-- 4. Kat (Üst Tabla - z=1.15m) -->
+      <visual name="shelf_layer_4"><pose>0 0 1.15 0 0 0</pose><geometry><box><size>0.5 0.38 0.025</size></box></geometry><material><ambient>0.82 0.6 0.35 1</ambient><diffuse>0.82 0.6 0.35 1</diffuse></material></visual>
+      <collision name="shelf_layer_4_col"><pose>0 0 1.15 0 0 0</pose><geometry><box><size>0.5 0.38 0.025</size></box></geometry></collision>
+    </link>
+  </model>
+</sdf>

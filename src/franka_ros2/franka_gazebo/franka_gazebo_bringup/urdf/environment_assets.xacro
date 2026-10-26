@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ================= MASA (TABLE) ================= -->
+  <link name="table_link">
+    <inertial>
+      <mass value="20.0"/>
+      <origin xyz="0 0 0.2" rpy="0 0 0"/>
+      <inertia ixx="1.0" ixy="0" ixz="0" iyy="1.0" iyz="0" izz="1.0"/>
+    </inertial>
+    <!-- Masa Üst Tablası (0.8m x 0.6m, Yükseklik: 0.4m) -->
+    <visual>
+      <origin xyz="0 0 0.38" rpy="0 0 0"/>
+      <geometry><box size="0.8 0.6 0.04"/></geometry>
+      <material name="wood"><color rgba="0.82 0.68 0.5 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.38" rpy="0 0 0"/>
+      <geometry><box size="0.8 0.6 0.04"/></geometry>
+    </collision>
+    <!-- Ayaklar -->
+    <visual><origin xyz="0.35 0.25 0.18" rpy="0 0 0"/><geometry><cylinder radius="0.02" length="0.36"/></geometry><material name="dark"><color rgba="0.2 0.2 0.2 1"/></material></visual>
+    <visual><origin xyz="-0.35 0.25 0.18" rpy="0 0 0"/><geometry><cylinder radius="0.02" length="0.36"/></geometry><material name="dark"/></visual>
+    <visual><origin xyz="0.35 -0.25 0.18" rpy="0 0 0"/><geometry><cylinder radius="0.02" length="0.36"/></geometry><material name="dark"/></visual>
+    <visual><origin xyz="-0.35 -0.25 0.18" rpy="0 0 0"/><geometry><cylinder radius="0.02" length="0.36"/></geometry><material name="dark"/></visual>
+  </link>
+
+  <joint name="table_joint" type="fixed">
+    <parent link="world"/>
+    <child link="table_link"/>
+    <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Gazebo için Masa Sabitleme -->
+  <gazebo reference="table_link">
+    <static>true</static>
+    <material>Gazebo/Wood</material>
+  </gazebo>
+
+  <!-- ================= ÇOK KATLI RAF MAKROSU ================= -->
+  <xacro:macro name="shelf_macro" params="prefix parent x y z">
+    <link name="${prefix}_link">
+      <inertial>
+        <mass value="15.0"/>
+        <origin xyz="0 0 0.6" rpy="0 0 0"/>
+        <inertia ixx="1.0" ixy="0" ixz="0" iyy="1.0" iyz="0" izz="1.0"/>
+      </inertial>
+      <!-- 4 Dikey Metal Direk (1.2m yükseklik) -->
+      <visual><origin xyz="0.25 0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry><material name="metal"><color rgba="0.25 0.25 0.28 1"/></material></visual>
+      <visual><origin xyz="0.25 -0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry><material name="metal"/></visual>
+      <visual><origin xyz="-0.25 0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry><material name="metal"/></visual>
+      <visual><origin xyz="-0.25 -0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry><material name="metal"/></visual>
+      
+      <collision><origin xyz="0.25 0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
+      <collision><origin xyz="0.25 -0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
+      <collision><origin xyz="-0.25 0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
+      <collision><origin xyz="-0.25 -0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
+
+      <!-- 4 Raf Katı -->
+      <visual><origin xyz="0 0 0.08" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry><material name="shelf_wood"><color rgba="0.82 0.6 0.35 1"/></material></visual>
+      <visual><origin xyz="0 0 0.45" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry><material name="shelf_wood"/></visual>
+      <visual><origin xyz="0 0 0.80" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry><material name="shelf_wood"/></visual>
+      <visual><origin xyz="0 0 1.15" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry><material name="shelf_wood"/></visual>
+
+      <collision><origin xyz="0 0 0.08" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry></collision>
+      <collision><origin xyz="0 0 0.45" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry></collision>
+      <collision><origin xyz="0 0 0.80" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry></collision>
+      <collision><origin xyz="0 0 1.15" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry></collision>
+    </link>
+
+    <joint name="${prefix}_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}_link"/>
+      <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+    </joint>
+
+    <gazebo reference="${prefix}_link">
+      <static>true</static>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- Sol Raf (Shelf 1) ve Sağ Raf (Shelf 2) -->
+  <xacro:shelf_macro prefix="shelf_1" parent="world" x="0.0" y="-1.2" z="0.0"/>
+  <xacro:shelf_macro prefix="shelf_2" parent="world" x="0.0" y="1.2" z="0.0"/>
+
+</robot>

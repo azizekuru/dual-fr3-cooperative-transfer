@@ -1,0 +1,259 @@
+name: Build and Publish pylibfranka Wheels
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'  # Also trigger on tags like 0.19.0
+  pull_request:
+    branches: ['main', 'master']
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/pylibfranka-build
+
+jobs:
+  build_wheels:
+    name: Build wheels for Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: '3.9'
+            python-tag: 'cp39'
+            ubuntu-version: '20.04'
+            manylinux-tag: 'manylinux_2_31_x86_64'
+          - python-version: '3.10'
+            python-tag: 'cp310'
+            ubuntu-version: '22.04'
+            manylinux-tag: 'manylinux_2_34_x86_64'
+          - python-version: '3.11'
+            python-tag: 'cp311'
+            ubuntu-version: '22.04'
+            manylinux-tag: 'manylinux_2_34_x86_64'
+          - python-version: '3.12'
+            python-tag: 'cp312'
+            ubuntu-version: '22.04'
+            manylinux-tag: 'manylinux_2_34_x86_64'
+          - python-version: '3.14'
+            python-tag: 'cp314'
+            ubuntu-version: '26.04'
+            manylinux-tag: 'manylinux_2_43_x86_64'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          fetch-depth: 0
+
+      - name: Get Package Version
+        id: get_version
+        run: |
+          VERSION=$(grep -oP 'set\(libfranka_VERSION\s+\K[\d.]+' CMakeLists.txt)
+          if [ -z "$VERSION" ]; then
+            echo "Error: Could not extract version from CMakeLists.txt"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Package version: $VERSION"
+        shell: bash
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull pre-built Docker image
+        run: |
+          echo "Pulling pre-built image for Python ${{ matrix.python-version }}..."
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:py${{ matrix.python-version }}
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:py${{ matrix.python-version }} pylibfranka-build:py${{ matrix.python-version }}
+
+      - name: Build Wheel for Python ${{ matrix.python-version }}
+        uses: addnab/docker-run-action@v3
+        with:
+          image: pylibfranka-build:py${{ matrix.python-version }}
+          options: -v ${{ github.workspace }}:/workspace
+          run: |
+            # The python project now lives under pylibfranka/; setup.py drives
+            # the native cmake build against the repo root (its parent).
+            cd /workspace/pylibfranka
+            
+            # Verify Python version
+            echo "Python version:"
+            python3 --version
+            
+            # Clean previous builds
+            rm -rf build dist *.egg-info
+            
+            # Build the wheel (version is auto-extracted from CMakeLists.txt by setup.py)
+            echo "Building wheel for Python ${{ matrix.python-version }}..."
+            python3 -m build --wheel
+            
+            # Create wheelhouse directory
+            mkdir -p wheelhouse
+            
+            echo "Built wheel:"
+            ls -la dist/*.whl
+
+      - name: Repair Wheels with Auditwheel
+        uses: addnab/docker-run-action@v3
+        with:
+          image: pylibfranka-build:py${{ matrix.python-version }}
+          options: -v ${{ github.workspace }}:/workspace
+          run: |
+            cd /workspace/pylibfranka
+            mkdir -p wheelhouse
+            
+            echo "Repairing wheels with auditwheel..."
+            for whl in dist/*.whl; do
+              if [ -f "$whl" ]; then
+                echo "Repairing: $whl"
+                echo "Target platform: ${{ matrix.manylinux-tag }}"
+                # Use the manylinux tag from matrix for this Python version
+                auditwheel repair "$whl" -w wheelhouse/ --plat ${{ matrix.manylinux-tag }} || \
+                  auditwheel repair "$whl" -w wheelhouse/ || \
+                  cp "$whl" wheelhouse/
+              fi
+            done
+            
+            echo "Final wheels in wheelhouse:"
+            ls -la wheelhouse/
+
+      - name: Test Installation
+        uses: addnab/docker-run-action@v3
+        with:
+          image: python:${{ matrix.python-version }}-slim
+          options: -v ${{ github.workspace }}:/workspace
+          run: |
+            # Install the wheel from wheelhouse
+            pip install /workspace/pylibfranka/wheelhouse/*.whl
+            
+            # IMPORTANT: Change to /tmp to avoid importing from local pylibfranka folder
+            cd /tmp
+            
+            # Test import and version
+            python -c "
+            import pathlib
+            import pylibfranka
+            print('pylibfranka imported successfully')
+            print(f'Version: {pylibfranka.__version__}')
+            
+            # Verify key classes are available
+            from pylibfranka import Robot, Gripper, Model, RobotState
+            print('All core classes imported successfully')
+            
+            # Test creating objects
+            from pylibfranka import JointPositions, JointVelocities, Torques
+            jp = JointPositions([0.0] * 7)
+            print(f'JointPositions: {jp.q}')
+
+            # Verify the type stubs shipped with the wheel (PEP 561)
+            pkg_dir = pathlib.Path(pylibfranka.__file__).parent
+            assert (pkg_dir / 'py.typed').exists(), 'missing py.typed marker'
+            assert (pkg_dir / '_pylibfranka.pyi').exists(), 'missing _pylibfranka.pyi stub'
+            print(f'Type stubs shipped: {[p.name for p in pkg_dir.glob(\"*.pyi\")]}')
+            print('All tests passed!')
+            "
+
+      - name: Upload Wheel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-python${{ matrix.python-version }}
+          path: pylibfranka/wheelhouse/*.whl
+          retention-days: 30
+
+  # NOTE: No sdist is built/published. pylibfranka is a pybind11 extension that
+  # requires the full libfranka C++ tree (built from the repo root) plus native
+  # deps (pinocchio, Poco, Eigen); an sdist cannot vendor the parent-repo sources
+  # (MANIFEST.in can only reach files inside pylibfranka/), so it could never be
+  # built with `pip install`. We ship only manylinux wheels; unsupported
+  # platforms get a clean "no matching distribution" error.
+
+  release:
+    name: Create GitHub Release
+    needs: [build_wheels]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get release info
+        id: get_release_info
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$TAG" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          pattern: wheel-*
+          merge-multiple: true
+
+      - name: List distributions
+        run: |
+          echo "Distributions to upload:"
+          ls -la dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_release_info.outputs.tag }}
+          name: libfranka ${{ steps.get_release_info.outputs.version }}
+          draft: false
+          prerelease: false
+          files: dist/*
+          body: |
+            # libfranka ${{ steps.get_release_info.outputs.version }}
+            
+            C++ library and Python bindings for controlling Franka robots.
+            
+            ## Documentation
+            
+            For installation instructions, see the [libfranka documentation](https://frankarobotics.github.io/docs/libfranka/docs/installation.html).
+            
+            - [pylibfranka Installation Guide](https://frankarobotics.github.io/docs/libfranka/docs/installation.html#python-package-pip)
+            - [pylibfranka Examples](https://github.com/frankarobotics/libfranka/tree/main/pylibfranka/examples)
+            - [pylibfranka README](https://github.com/frankarobotics/libfranka/blob/main/pylibfranka/README.md)
+
+  publish_pypi:
+    name: Publish to PyPI
+    needs: [build_wheels]
+    runs-on: ubuntu-latest
+    # Publish automatically on tags
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      id-token: write  # Required for Trusted Publisher OIDC
+
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          pattern: wheel-*
+          merge-multiple: true
+
+      - name: List distributions
+        run: |
+          echo "Distributions to upload:"
+          ls -la dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+          verbose: true

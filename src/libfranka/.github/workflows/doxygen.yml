@@ -1,0 +1,106 @@
+name: Generate Doxygen Documentation for libfranka
+
+on:
+  push:
+    tags:
+      - '*'
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  doxygen:
+    runs-on: ubuntu-latest
+
+    env:
+      DOC_BASE: build/doc/docs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y doxygen graphviz cmake
+
+      - name: Determine documentation tag
+        id: doc_tag
+        run: |
+          set -e
+
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            echo "TAG_NAME=latest" >> $GITHUB_OUTPUT
+          else
+            echo "Unsupported ref: $GITHUB_REF" >&2
+            exit 1
+          fi
+
+      - name: Build documentation
+        run: |
+          set -e
+
+          TAG_NAME="${{ steps.doc_tag.outputs.TAG_NAME }}"
+          DOC_DIR="${DOC_BASE}/$TAG_NAME"
+
+          echo "Using documentation tag: $TAG_NAME"
+
+          # Clean latest deployment if rebuilding latest
+          if [[ "$TAG_NAME" == "latest" ]]; then
+            rm -rf "$DOC_DIR"
+          fi
+
+          mkdir -p "$DOC_DIR"
+
+          cd build || exit 1
+
+          cmake -D BUILD_DOCUMENTATION=ON -D SKIP_CXX_BUILD=ON ..
+          make doc
+
+      - name: Normalize HTML structure
+        run: |
+          set -e
+
+          TAG_NAME="${{ steps.doc_tag.outputs.TAG_NAME }}"
+          DOC_DIR="${DOC_BASE}/$TAG_NAME"
+
+          # Doxygen outputs to docs/<cmake_version>/html/ which may differ
+          # from TAG_NAME (e.g. "latest" vs "0.20.5"). Find the actual output.
+          BUILT_HTML=$(find "${DOC_BASE}" -type d -name html | head -1)
+
+          if [[ -n "$BUILT_HTML" && -d "$BUILT_HTML" ]]; then
+            # Move HTML contents into the target directory
+            rm -rf "$DOC_DIR"
+            mkdir -p "$DOC_DIR"
+            mv "$BUILT_HTML"/* "$DOC_DIR"/
+            # Clean up the versioned build directory if it's different from DOC_DIR
+            BUILT_PARENT=$(dirname "$BUILT_HTML")
+            if [[ "$BUILT_PARENT" != "$DOC_DIR" ]]; then
+              rm -rf "$BUILT_PARENT"
+            fi
+          else
+            echo "::error::HTML directory not found after build"
+            exit 1
+          fi
+
+      - name: Create redirect index
+        run: |
+          TAG_NAME="${{ steps.doc_tag.outputs.TAG_NAME }}"
+
+          URL="https://frankarobotics.github.io/libfranka/${TAG_NAME}/"
+
+          echo "<html><head><meta http-equiv=\"refresh\" content=\"0; url=$URL\"></head></html>" \
+            > "${DOC_BASE}/index.html"
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ${{ env.DOC_BASE }}
+          keep_files: true
