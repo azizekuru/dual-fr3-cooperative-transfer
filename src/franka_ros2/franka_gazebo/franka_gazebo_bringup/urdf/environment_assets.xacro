@@ -31,7 +31,6 @@
     <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
   </joint>
 
-  <!-- Gazebo için Masa Sabitleme -->
   <gazebo reference="table_link">
     <static>true</static>
     <material>Gazebo/Wood</material>
@@ -56,7 +55,7 @@
       <collision><origin xyz="-0.25 0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
       <collision><origin xyz="-0.25 -0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
 
-      <!-- 4 Raf Katı -->
+      <!-- 4 Raf Katı: 0.08m (1. kat), 0.45m (2. kat), 0.80m (3. kat), 1.15m (4. kat) -->
       <visual><origin xyz="0 0 0.08" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry><material name="shelf_wood"><color rgba="0.82 0.6 0.35 1"/></material></visual>
       <visual><origin xyz="0 0 0.45" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry><material name="shelf_wood"/></visual>
       <visual><origin xyz="0 0 0.80" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry><material name="shelf_wood"/></visual>
@@ -82,5 +81,34 @@
   <!-- Sol Raf (Shelf 1) ve Sağ Raf (Shelf 2) -->
   <xacro:shelf_macro prefix="shelf_1" parent="world" x="0.0" y="-1.2" z="0.0"/>
   <xacro:shelf_macro prefix="shelf_2" parent="world" x="0.0" y="1.2" z="0.0"/>
+
+  <!-- ================= HEDEF KIRMIZI KUTU (TARGET BOX) ================= -->
+  <!-- 2. Kat tablası Z = 0.45m'de. Tabla kalınlığı 0.025m, kutu 0.05m -> Z_merkez = 0.45 + 0.0125 + 0.025 = 0.4875m -->
+  <link name="target_box_link">
+    <inertial>
+      <mass value="0.05"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.00002" ixy="0" ixz="0" iyy="0.00002" iyz="0" izz="0.00002"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.05"/></geometry>
+      <material name="bright_red"><color rgba="1.0 0.0 0.0 1.0"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.05 0.05 0.05"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="target_box_joint" type="fixed">
+    <parent link="shelf_1_link"/>
+    <child link="target_box_link"/>
+    <origin xyz="0.0 0.0 0.4875" rpy="0 0 0"/>
+  </joint>
+
+  <gazebo reference="target_box_link">
+    <material>Gazebo/Red</material>
+  </gazebo>
 
 </robot>
