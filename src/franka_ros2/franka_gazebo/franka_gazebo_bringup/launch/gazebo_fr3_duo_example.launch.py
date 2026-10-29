@@ -24,7 +24,8 @@ from launch.actions import (
     IncludeLaunchDescription, 
     ExecuteProcess, 
     OpaqueFunction, 
-    RegisterEventHandler
+    RegisterEventHandler,
+    TimerAction
 )
 from launch.event_handlers import OnProcessExit, OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -263,8 +264,10 @@ def generate_launch_description():
         arguments=[
             'joint_state_broadcaster',
             'fr3_duo_joint_impedance_example_controller',
-                   '--controller-manager-timeout', '120',
-                   '--service-call-timeout', '60'],
+            'left_gripper_controller',
+            'right_gripper_controller',
+            '--controller-manager-timeout', '120',
+            '--service-call-timeout', '60'],
         parameters=[PathJoinSubstitution([
             FindPackageShare('franka_gazebo_bringup'),
             'config',

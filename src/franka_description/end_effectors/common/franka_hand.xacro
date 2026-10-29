@@ -118,7 +118,7 @@
       <child link="${ee_prefix}leftfinger" />
       <origin xyz="0 0 0.0584" rpy="0 0 0" />
       <axis xyz="0 1 0" />
-      <limit effort="100" lower="0.0" upper="0.04" velocity="0.2" />
+      <limit effort="100" lower="-0.005" upper="0.05" velocity="0.2" />
       <dynamics damping="0.3" />
     </joint>
     <joint name="${ee_prefix}finger_joint2" type="prismatic">
@@ -126,7 +126,7 @@
       <child link="${ee_prefix}rightfinger" />
       <origin xyz="0 0 0.0584" rpy="0 0 ${pi}" />
       <axis xyz="0 1 0" />
-      <limit effort="100" lower="0.0" upper="0.04" velocity="0.2" />
+      <limit effort="100" lower="-0.005" upper="0.05" velocity="0.2" />
       <mimic joint="${ee_prefix}finger_joint1" />
       <dynamics damping="0.3" />
     </joint>

@@ -1,6 +1,7 @@
 controller_manager:
   ros__parameters:
     update_rate: 1000  # Hz
+    position_proportional_gain: 0.002
 
     joint_position_example_controller:
       type: franka_example_controllers/JointPositionExampleController
@@ -26,6 +27,10 @@ controller_manager:
     cartesian_impedance_example_controller:
       type: franka_example_controllers/CartesianImpedanceExampleController
 
+    left_gripper_controller:
+      type: forward_command_controller/ForwardCommandController
+    right_gripper_controller:
+      type: forward_command_controller/ForwardCommandController
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
@@ -229,3 +234,15 @@ spine_joint_trajectory_controller:
     state_interfaces:
       - position
       - velocity
+
+left_gripper_controller:
+  ros__parameters:
+    joints:
+      - left_fr3v2_finger_joint1
+    interface_name: position
+
+right_gripper_controller:
+  ros__parameters:
+    joints:
+      - right_fr3v2_finger_joint1
+    interface_name: position

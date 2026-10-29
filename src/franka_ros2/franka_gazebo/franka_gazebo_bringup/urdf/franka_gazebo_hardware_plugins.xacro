@@ -30,6 +30,7 @@
     <gazebo>
       <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
         <parameters>$(find franka_gazebo_bringup)/config/franka_gazebo_controllers.yaml</parameters>
+        <position_proportional_gain>0.002</position_proportional_gain>
       </plugin>
     </gazebo>
   </xacro:macro>
