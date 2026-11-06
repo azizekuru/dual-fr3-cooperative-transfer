@@ -1,0 +1,72 @@
+# This config file is used by ros2_control
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz
+
+    arm_1_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
+    arm_2_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
+    gripper_1_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
+    gripper_2_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+arm_1_controller:
+  ros__parameters:
+    joints:
+      - left_fr3v2_joint1
+      - left_fr3v2_joint2
+      - left_fr3v2_joint3
+      - left_fr3v2_joint4
+      - left_fr3v2_joint5
+      - left_fr3v2_joint6
+      - left_fr3v2_joint7
+    command_interfaces:
+      []
+    state_interfaces:
+      []
+    allow_nonzero_velocity_at_trajectory_end: true
+arm_2_controller:
+  ros__parameters:
+    joints:
+      - right_fr3v2_joint1
+      - right_fr3v2_joint2
+      - right_fr3v2_joint3
+      - right_fr3v2_joint4
+      - right_fr3v2_joint5
+      - right_fr3v2_joint6
+      - right_fr3v2_joint7
+    command_interfaces:
+      []
+    state_interfaces:
+      []
+    allow_nonzero_velocity_at_trajectory_end: true
+gripper_1_controller:
+  ros__parameters:
+    joints:
+      - left_fr3v2_finger_joint1
+    command_interfaces:
+      []
+    state_interfaces:
+      []
+    allow_nonzero_velocity_at_trajectory_end: true
+gripper_2_controller:
+  ros__parameters:
+    joints:
+      - right_fr3v2_finger_joint1
+    command_interfaces:
+      []
+    state_interfaces:
+      []
+    allow_nonzero_velocity_at_trajectory_end: true

@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fr3_duo_gazebo">
+    <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+
+    <!-- Import fr3_duo_gazebo urdf file -->
+    <xacro:include filename="$(find franka_gazebo_bringup)/urdf/dual_robot.urdf" />
+
+    <!-- Import control_xacro -->
+    <xacro:include filename="fr3_duo_gazebo.ros2_control.xacro" />
+
+
+    <xacro:fr3_duo_gazebo_ros2_control name="FakeSystem" initial_positions_file="$(arg initial_positions_file)"/>
+
+</robot>

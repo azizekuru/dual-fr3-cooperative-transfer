@@ -1,0 +1,10 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: franka_gazebo_bringup
+    relative_path: urdf/dual_robot.urdf
+  srdf:
+    relative_path: config/fr3_duo_gazebo.srdf
+  package_settings:
+    author_name: rumeysa
+    author_email: maysablam41@hotmail.com
+    generated_timestamp: 1793398125

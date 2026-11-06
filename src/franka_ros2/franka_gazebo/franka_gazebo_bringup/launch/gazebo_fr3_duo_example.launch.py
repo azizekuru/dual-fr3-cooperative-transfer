@@ -276,6 +276,37 @@ def generate_launch_description():
         output='screen',
     )
 
+    spawn_joint_state = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['joint_state_broadcaster', '-c', '/controller_manager'],
+        output='screen',
+    )
+    spawn_arm_1_controller = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['arm_1_controller', '-c', '/controller_manager'],
+        output='screen',
+    )
+    spawn_arm_2_controller = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['arm_2_controller', '-c', '/controller_manager'],
+        output='screen',
+    )
+    spawn_gripper_1 = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['left_gripper_controller', '-c', '/controller_manager'],
+        output='screen',
+    )
+    spawn_gripper_2 = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['right_gripper_controller', '-c', '/controller_manager'],
+        output='screen',
+    )
+
     return LaunchDescription([
         load_gripper_launch_argument,
         franka_hand_launch_argument,
@@ -294,7 +325,13 @@ def generate_launch_description():
         RegisterEventHandler(
             event_handler=OnProcessExit(
                 target_action=spawn,
-                on_exit=[fr3_duo_controller],
+                on_exit=[
+                    spawn_joint_state,
+                    spawn_arm_1_controller,
+                    spawn_arm_2_controller,
+                    spawn_gripper_1,
+                    spawn_gripper_2
+                ],
             )
         ),
     ])

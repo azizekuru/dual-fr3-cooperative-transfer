@@ -11,25 +11,25 @@ def generate_launch_description():
     fr3_duo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_bringup, 'launch', 'gazebo_fr3_duo_example.launch.py')
-        )
+        ),
+        launch_arguments={'rviz': 'false'}.items()
     )
-
     box_sdf = os.path.join(pkg_bringup, 'models', 'target_box', 'model.sdf')
 
     # Yalnızca hareketli transfer küpünü spawn ediyoruz
     spawn_box = Node(
         package='ros_gz_sim',
         executable='create',
-        arguments=['-name', 'target_box', '-file', box_sdf, '-x', '0.0', '-y', '-1.2', '-z', '0.485'],
+        arguments=['-name', 'target_box', '-file', box_sdf, '-x', '0.0', '-y', '-1.04', '-z', '0.54'],
         output='screen'
     )
 
-    delayed_spawns = TimerAction(
-        period=4.0,
-        actions=[spawn_box]
-    )
+    #delayed_spawns = TimerAction(
+    #    period=4.0,
+    #    actions=[spawn_box]
+    #)
 
     return LaunchDescription([
         fr3_duo_launch,
-        delayed_spawns
+        #delayed_spawns
     ])
