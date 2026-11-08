@@ -14,7 +14,7 @@
       <geometry><box size="0.8 0.6 0.04"/></geometry>
       <material name="wood"><color rgba="0.82 0.68 0.5 1"/></material>
     </visual>
-    <collision>
+    <collision name="table_top_collision">
       <origin xyz="0 0 0.38" rpy="0 0 0"/>
       <geometry><box size="0.8 0.6 0.04"/></geometry>
     </collision>
@@ -32,6 +32,11 @@
   </joint>
 
   <gazebo reference="table_link">
+    <sensor name="table_contacts" type="contact">
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <contact><collision>table_link_fixed_joint_lump__table_top_collision_collision</collision></contact>
+    </sensor>
     <static>true</static>
     <material>Gazebo/Wood</material>
   </gazebo>

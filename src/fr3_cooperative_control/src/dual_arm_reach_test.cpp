@@ -35,6 +35,7 @@
 #include <thread>
 #include <vector>
 
+#include <Eigen/Geometry>
 #include <geometry_msgs/msg/pose.hpp>
 #include <moveit/move_group_interface/move_group_interface.hpp>
 #include <moveit/planning_scene_interface/planning_scene_interface.hpp>
@@ -96,6 +97,7 @@ struct Arm
   std::string name;   // MoveIt grubu: arm_1 / arm_2
   std::string tcp;    // <side>_fr3v2_hand_tcp
   std::shared_ptr<MoveGroupInterface> group;
+  moveit_msgs::msg::RobotTrajectory last_plan;
 };
 
 // Bir uzanma icin aday: on-poz + hedef (el yonu ve yukseklik farkli olabilir)
@@ -118,6 +120,7 @@ public:
     node_->get_parameter_or<double>("shelf_2_y", shelf_2_y_, 1.04);
     node_->get_parameter_or<double>("handover_y", handover_y_, 0.05);
     node_->get_parameter_or<bool>("via_ready", via_ready_, false);
+    node_->get_parameter_or<bool>("tcp_diagnostics", tcp_diagnostics_, false);
     node_->get_parameter_or<double>("speed", speed_, 0.7);
     node_->get_parameter_or<double>("approach_speed", approach_speed_, 0.3);
     node_->get_parameter_or<double>("settle_timeout", settle_timeout_, 2.0);
@@ -352,6 +355,7 @@ private:
       MoveGroupInterface::Plan plan;
       const auto ec = a.group->plan(plan);
       if (ec == moveit::core::MoveItErrorCode::SUCCESS) {
+        if (tcp_diagnostics_) {a.last_plan = plan.trajectory;}
         const auto ex = a.group->execute(plan);
         if (ex == moveit::core::MoveItErrorCode::SUCCESS) {return true;}
         RCLCPP_WARN(log_, "%s joint plani uygulanamadi (deneme %d/%d, hata kodu %d), yeniden deneniyor",
@@ -379,6 +383,7 @@ private:
       const auto ec = a.group->plan(plan);
       a.group->clearPoseTargets();
       if (ec == moveit::core::MoveItErrorCode::SUCCESS) {
+        if (tcp_diagnostics_) {a.last_plan = plan.trajectory;}
         const auto ex = a.group->execute(plan);
         if (ex == moveit::core::MoveItErrorCode::SUCCESS) {return true;}
         RCLCPP_WARN(log_, "%s poz plani uygulanamadi (deneme %d/%d, hata kodu %d), yeniden deneniyor",
@@ -426,6 +431,7 @@ private:
       return false;
     }
     rt.getRobotTrajectoryMsg(traj);
+    if (tcp_diagnostics_) {a.last_plan = traj;}
     return a.group->execute(traj) == moveit::core::MoveItErrorCode::SUCCESS;
   }
 
@@ -474,6 +480,40 @@ private:
       a.name.c_str(), p.position.x, p.position.y, p.position.z,
       expected.position.x, expected.position.y, expected.position.z,
       1000.0 * std::sqrt(dx * dx + dy * dy + dz * dz));
+    if (!tcp_diagnostics_ || a.last_plan.joint_trajectory.points.empty()) {return;}
+    const auto & jt = a.last_plan.joint_trajectory;
+    auto state = a.group->getCurrentState(2.0);
+    if (!state) {RCLCPP_ERROR(log_, "TCP DIAG: no fresh state");return;}
+    auto planned = *state;
+    planned.setVariablePositions(jt.joint_names, jt.points.back().positions);
+    planned.update();
+    const auto endpoint = planned.getGlobalLinkTransform(a.tcp);
+    const Eigen::Vector3d requested(expected.position.x, expected.position.y, expected.position.z);
+    const Eigen::Quaterniond requested_rotation(expected.orientation.w, expected.orientation.x,
+      expected.orientation.y, expected.orientation.z);
+    RCLCPP_INFO(log_, "TCP DIAG %s: planned_endpoint_error=%.3f mm angle=%.4f rad",
+      a.name.c_str(), 1000.0 * (endpoint.translation() - requested).norm(),
+      Eigen::Quaterniond(endpoint.rotation()).angularDistance(requested_rotation));
+    const auto started = std::chrono::steady_clock::now();
+    for (int sample = 0; sample <= 10; ++sample) {
+      if (sample > 0) {std::this_thread::sleep_for(500ms);}
+      state = a.group->getCurrentState(2.0);
+      if (!state) {RCLCPP_ERROR(log_, "TCP DIAG: missing fresh sample");continue;}
+      state->update();
+      const auto actual = state->getGlobalLinkTransform(a.tcp);
+      double max_joint_error = 0.0;
+      for (size_t i = 0; i < jt.joint_names.size(); ++i) {
+        max_joint_error = std::max(max_joint_error,
+          std::abs(state->getVariablePosition(jt.joint_names[i]) - jt.points.back().positions[i]));
+      }
+      RCLCPP_INFO(log_,
+        "TCP DIAG %s t=%.2f s: target_error=%.3f mm tracking_error=%.3f mm joint_error=%.6f rad",
+        a.name.c_str(), std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - started).count(),
+        1000.0 * (actual.translation() - requested).norm(),
+        1000.0 * (actual.translation() - endpoint.translation()).norm(), max_joint_error);
+    }
+
   }
 
   // --------------------------------------------------------- planning scene --
@@ -506,6 +546,7 @@ private:
   double shelf_1_y_ = -1.04;
   double shelf_2_y_ = 1.04;
   double handover_y_ = 0.05;
+  bool tcp_diagnostics_ = false;
   bool via_ready_ = false;        // shelf_1'den masaya gecerken once ready'ye uğra (true) ya da dogrudan git (false)
   double speed_ = 0.7;            // serbest hareketler (ready, on-poz): joint limits'in kaci
   double approach_speed_ = 0.3;   // hedefe duz cizgi yaklasma / geri cekilme

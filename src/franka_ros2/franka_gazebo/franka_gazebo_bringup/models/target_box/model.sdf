@@ -2,6 +2,13 @@
 <sdf version="1.6">
   <model name="target_box">
     <static>false</static>
+    <plugin filename="gz-sim-pose-publisher-system" name="gz::sim::systems::PosePublisher">
+      <publish_model_pose>true</publish_model_pose>
+      <publish_link_pose>false</publish_link_pose>
+      <publish_nested_model_pose>false</publish_nested_model_pose>
+      <use_pose_vector_msg>false</use_pose_vector_msg>
+      <update_frequency>30</update_frequency>
+    </plugin>
     <link name="link">
       <inertial>
         <mass>0.05</mass>
@@ -11,6 +18,11 @@
           <izz>0.000013</izz>
         </inertia>
       </inertial>
+      <sensor name="box_contacts" type="contact">
+        <always_on>true</always_on>
+        <update_rate>100</update_rate>
+        <contact><collision>col</collision></contact>
+      </sensor>
       <collision name="col">
         <geometry><box><size>0.04 0.04 0.04</size></box></geometry>
         <surface>

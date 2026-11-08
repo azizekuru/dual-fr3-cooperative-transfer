@@ -7,19 +7,16 @@ import sys
 import time
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float64MultiArray
+from control_msgs.action import GripperCommand
+from rclpy.action import ActionClient
 from sensor_msgs.msg import JointState
 
 
 class GripperTester(Node):
     def __init__(self):
         super().__init__('gripper_tester')
-        self.left_pub = self.create_publisher(
-            Float64MultiArray, '/left_gripper_controller/commands', 10
-        )
-        self.right_pub = self.create_publisher(
-            Float64MultiArray, '/right_gripper_controller/commands', 10
-        )
+        self.left_client = ActionClient(self, GripperCommand, '/left_gripper_controller/gripper_cmd')
+        self.right_client = ActionClient(self, GripperCommand, '/right_gripper_controller/gripper_cmd')
         self.current_left_pos = 0.0
         self.current_right_pos = 0.0
         self.js_sub = self.create_subscription(
@@ -38,16 +35,22 @@ class GripperTester(Node):
         """
         Belirtilen pozisyonu süre boyunca yayınlar ve canlı eklem değerini ekrana basar.
         """
-        msg = Float64MultiArray()
-        msg.data = [float(pos)]
+        goal = GripperCommand.Goal()
+        goal.command.position = float(pos)
+        goal.command.max_effort = 20.0
+        for client in ([self.left_client] if arm == 'left' else
+                       [self.right_client] if arm == 'right' else
+                       [self.left_client, self.right_client]):
+            if not client.wait_for_server(timeout_sec=10.0):
+                raise RuntimeError('Gripper action server unavailable')
+            accepted = client.send_goal_async(goal)
+            rclpy.spin_until_future_complete(self, accepted, timeout_sec=5.0)
+            if not accepted.done() or not accepted.result().accepted:
+                raise RuntimeError('Gripper action goal rejected or timed out')
 
         start_time = time.time()
         last_print = 0
         while (time.time() - start_time) < duration_sec:
-            if arm in ('left', 'both'):
-                self.left_pub.publish(msg)
-            if arm in ('right', 'both'):
-                self.right_pub.publish(msg)
             rclpy.spin_once(self, timeout_sec=0.05)
             
             # Her 0.5 saniyede bir canlı durumu terminale yaz

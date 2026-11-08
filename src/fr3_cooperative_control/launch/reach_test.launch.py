@@ -44,6 +44,8 @@ def generate_launch_description():
                               description='Hedefe duz cizgi yaklasma hizi (0-1)'),
         DeclareLaunchArgument('settle_timeout', default_value='2.0',
                               description='Planlamadan once kolun durmasini bekleme suresi, sn (0=bekleme)'),
+        DeclareLaunchArgument('tcp_diagnostics', default_value='false',
+                              description='Hareketten sonra 5 sn hedef/plan/olcum farklarini raporla'),
         DeclareLaunchArgument('via_ready', default_value='false',
                               description='true: shelf_1 sonrasi masaya gecmeden once ready pozuna ugra'),
         DeclareLaunchArgument('move_group_delay', default_value='8.0',
@@ -81,6 +83,8 @@ def generate_launch_description():
                 'speed': ParameterValue(LaunchConfiguration('speed'), value_type=float),
                 'approach_speed': ParameterValue(LaunchConfiguration('approach_speed'), value_type=float),
                 'settle_timeout': ParameterValue(LaunchConfiguration('settle_timeout'), value_type=float),
+                'tcp_diagnostics': ParameterValue(
+                    LaunchConfiguration('tcp_diagnostics'), value_type=bool),
                 'via_ready': ParameterValue(LaunchConfiguration('via_ready'), value_type=bool),
             }],
         )],

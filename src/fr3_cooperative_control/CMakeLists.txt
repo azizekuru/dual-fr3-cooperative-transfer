@@ -10,8 +10,15 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_msgs REQUIRED)
+find_package(moveit_core REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(control_msgs REQUIRED)
+find_package(controller_manager_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(shape_msgs REQUIRED)
+find_package(ros_gz_interfaces REQUIRED)
 
 # --- Mevcut koordinator (degistirilmedi) ---
 add_executable(dual_arm_coordinator src/dual_arm_coordinator.cpp)
@@ -42,7 +49,16 @@ ament_target_dependencies(
   "tf2_geometry_msgs"
 )
 
-install(TARGETS dual_arm_coordinator dual_arm_reach_test
+add_executable(single_arm_pick_test src/single_arm_pick_test.cpp)
+target_compile_features(single_arm_pick_test PUBLIC cxx_std_17)
+ament_target_dependencies(single_arm_pick_test
+  rclcpp rclcpp_action control_msgs controller_manager_msgs sensor_msgs shape_msgs ros_gz_interfaces
+  moveit_ros_planning_interface moveit_core moveit_msgs geometry_msgs)
+
+install(TARGETS dual_arm_coordinator dual_arm_reach_test single_arm_pick_test
+  DESTINATION lib/${PROJECT_NAME})
+
+install(PROGRAMS scripts/gripper_alignment_check.py
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch

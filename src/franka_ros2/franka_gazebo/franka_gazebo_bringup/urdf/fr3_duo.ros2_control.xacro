@@ -40,6 +40,11 @@
           include_effort_command="${include_effort_command}"
           include_finger_joint="${include_finger_joint}"/>
 
+      <!-- Register the URDF mimic joints with gz_ros2_control, without commands. -->
+      <xacro:if value="${include_finger_joint}">
+        <xacro:passive_joint joint_name="${arm1_prefix}_${arm1_type}_finger_joint2"/>
+        <xacro:passive_joint joint_name="${arm2_prefix}_${arm2_type}_finger_joint2"/>
+      </xacro:if>
     </ros2_control>
 
   </xacro:macro>
