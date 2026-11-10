@@ -55,7 +55,13 @@ ament_target_dependencies(single_arm_pick_test
   rclcpp rclcpp_action control_msgs controller_manager_msgs sensor_msgs shape_msgs ros_gz_interfaces
   moveit_ros_planning_interface moveit_core moveit_msgs geometry_msgs)
 
-install(TARGETS dual_arm_coordinator dual_arm_reach_test single_arm_pick_test
+add_executable(right_arm_table_pick src/right_arm_table_pick.cpp)
+target_compile_features(right_arm_table_pick PUBLIC cxx_std_17)
+ament_target_dependencies(right_arm_table_pick
+  rclcpp rclcpp_action control_msgs controller_manager_msgs sensor_msgs shape_msgs ros_gz_interfaces
+  moveit_ros_planning_interface moveit_core moveit_msgs geometry_msgs)
+
+install(TARGETS dual_arm_coordinator dual_arm_reach_test single_arm_pick_test right_arm_table_pick
   DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS scripts/gripper_alignment_check.py

@@ -1,6 +1,8 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
+  <xacro:arg name="shelf2_y" default="1.20"/>
+
   <!-- ================= MASA (TABLE) ================= -->
   <link name="table_link">
     <inertial>
@@ -55,10 +57,10 @@
       <visual><origin xyz="-0.25 0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry><material name="metal"/></visual>
       <visual><origin xyz="-0.25 -0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry><material name="metal"/></visual>
       
-      <collision><origin xyz="0.25 0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
-      <collision><origin xyz="0.25 -0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
-      <collision><origin xyz="-0.25 0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
-      <collision><origin xyz="-0.25 -0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
+      <collision name="${prefix}_post_pp_collision"><origin xyz="0.25 0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
+      <collision name="${prefix}_post_pn_collision"><origin xyz="0.25 -0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
+      <collision name="${prefix}_post_np_collision"><origin xyz="-0.25 0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
+      <collision name="${prefix}_post_nn_collision"><origin xyz="-0.25 -0.18 0.6" rpy="0 0 0"/><geometry><box size="0.04 0.04 1.2"/></geometry></collision>
 
       <!-- 4 Raf Katı: 0.08m (1. kat), 0.45m (2. kat), 0.80m (3. kat), 1.15m (4. kat) -->
       <visual><origin xyz="0 0 0.08" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry><material name="shelf_wood"><color rgba="0.82 0.6 0.35 1"/></material></visual>
@@ -66,10 +68,10 @@
       <visual><origin xyz="0 0 0.80" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry><material name="shelf_wood"/></visual>
       <visual><origin xyz="0 0 1.15" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry><material name="shelf_wood"/></visual>
 
-      <collision><origin xyz="0 0 0.08" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry></collision>
-      <collision><origin xyz="0 0 0.45" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry></collision>
-      <collision><origin xyz="0 0 0.80" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry></collision>
-      <collision><origin xyz="0 0 1.15" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry></collision>
+      <collision name="${prefix}_level_1_collision"><origin xyz="0 0 0.08" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry></collision>
+      <collision name="${prefix}_level_2_collision"><origin xyz="0 0 0.45" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry></collision>
+      <collision name="${prefix}_level_3_collision"><origin xyz="0 0 0.80" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry></collision>
+      <collision name="${prefix}_level_4_collision"><origin xyz="0 0 1.15" rpy="0 0 0"/><geometry><box size="0.5 0.38 0.025"/></geometry></collision>
     </link>
 
     <joint name="${prefix}_joint" type="fixed">
@@ -80,12 +82,27 @@
 
     <gazebo reference="${prefix}_link">
       <static>true</static>
+      <xacro:if value="${prefix == 'shelf_2'}">
+        <sensor name="shelf_contacts" type="contact">
+          <always_on>true</always_on><update_rate>100</update_rate>
+          <contact>
+          <collision>${prefix}_link_fixed_joint_lump__${prefix}_post_pp_collision_collision</collision>
+          <collision>${prefix}_link_fixed_joint_lump__${prefix}_post_pn_collision_collision_1</collision>
+          <collision>${prefix}_link_fixed_joint_lump__${prefix}_post_np_collision_collision_2</collision>
+          <collision>${prefix}_link_fixed_joint_lump__${prefix}_post_nn_collision_collision_3</collision>
+          <collision>${prefix}_link_fixed_joint_lump__${prefix}_level_1_collision_collision_4</collision>
+          <collision>${prefix}_link_fixed_joint_lump__${prefix}_level_2_collision_collision_5</collision>
+          <collision>${prefix}_link_fixed_joint_lump__${prefix}_level_3_collision_collision_6</collision>
+          <collision>${prefix}_link_fixed_joint_lump__${prefix}_level_4_collision_collision_7</collision>
+          </contact>
+        </sensor>
+      </xacro:if>
     </gazebo>
   </xacro:macro>
 
   <!-- Sol Raf (Shelf 1) ve Sağ Raf (Shelf 2) -->
   <xacro:shelf_macro prefix="shelf_1" parent="world" x="0.0" y="-1.2" z="0.0"/>
-  <xacro:shelf_macro prefix="shelf_2" parent="world" x="0.0" y="1.2" z="0.0"/>
+  <xacro:shelf_macro prefix="shelf_2" parent="world" x="0.0" y="$(arg shelf2_y)" z="0.0"/>
 
 
 </robot>

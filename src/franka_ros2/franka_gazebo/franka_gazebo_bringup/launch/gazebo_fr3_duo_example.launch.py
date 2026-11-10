@@ -64,6 +64,7 @@ def get_robot_description(context: LaunchContext, load_gripper, franka_hand, wit
             'hand': load_gripper_str,
             'ee_id': franka_hand_str,
             'gazebo_effort': 'true',
+            'shelf2_y': LaunchConfiguration('shelf2_y').perform(context),
         }
     )
 
@@ -308,6 +309,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('shelf2_y', default_value='1.20'),
         load_gripper_launch_argument,
         franka_hand_launch_argument,
         namespace_launch_argument,

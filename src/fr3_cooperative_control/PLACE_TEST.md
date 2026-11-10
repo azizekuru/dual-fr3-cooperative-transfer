@@ -20,11 +20,21 @@ Yerleştirme için kutu–el dönüşümü gerçek kutu pozundan yenilenir. Kutu
 X ekseninde 90 derecedir; parmaklar üstten yaklaşır. Eğim, küp yüz normallerinden
 masa normaline en yakın olanıyla ölçülür. Bu seçim farklı boyutlu nesnelere doğrudan uygulanmaz.
 
-Yüksekte üstten yöne geçiş genel çarpışma kontrollü planla, hız/ivme ölçeği 0.05 ile
-yapılır. Ön yerleştirme merkez yüksekliği 0.50 m'dir. Bu aşamada TCP yakınlığı
-0.3 mm ve 0.0015 rad koşullarıyla beklenir. Kutu eğimi 0.5 derecenin altına inmelidir.
-Ardından düz Kartezyen inişle merkez 0.422 m'ye getirilir. Masa yüzeyi MoveIt world
-içinde 0.40 m'dir. Gazebo dünya yüksekliği 0.05 m daha fazladır.
+Ön yerleştirme merkez yüksekliği 0.50 m'dir. Kol hareket etmeden önce aday eklem
+pozundan 0.422 m'ye kadar düz Kartezyen iniş çarpışma ve eklem sıçraması açısından
+denetlenir. İniş veya aday poza ulaşan MoveIt rotası doğrulanamazsa başka bir
+eklem çözümü denenir. Seçilen yaklaşım hız/ivme ölçeği 0.05 ile yürütülür.
+TCP yakınlığı 0.3 mm ve 0.0015 rad koşullarıyla beklenir. Kutu eğimi 0.5 derecenin
+altına inmelidir. Gerçek iniş ölçülen kutu ve eklem durumundan tekrar hesaplanır,
+hız/ivme ölçeği 0.02 ile yürütülür ve merkez 0.422 m'ye getirilir. Masa yüzeyi
+MoveIt world içinde 0.40 m'dir. Gazebo dünya yüksekliği 0.05 m daha fazladır.
+
+Ölçülen durumdan hesaplanan 78 mm iniş yolu yürütmeden önce reddedilirse,
+doğrulanan yol yüzdesi veya sıçrayan eklem ve radyan farkı kaydedilir. Kutu
+tutulurken masa üstünde farklı bir eklem duruşuna geçiş ve o duruştan iniş
+planlanır. En az bir eklemin konumu 0.1 rad farklı olmalıdır. Bu yeniden
+deneme bir kez yapılır. İkinci iniş reddedilirse gripper kapalı kalır.
+Yürütme hatası veya fiziksel temas halinde yeniden deneme yapılmaz.
 
 Son inişin 2 mm açıklığında, kapalı gripper hedefi 0.018 m yerine 0.0198 m'ye
 çekilir. Bu hâlâ kutunun 0.020 m yarı genişliğinden küçüktür; açık çene boşluğu

@@ -44,6 +44,11 @@ Eigen::Quaterniond rotation(const Pose & p)
 {
   return {p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z};
 }
+class FinePathRejected : public std::runtime_error
+{
+public:
+  using std::runtime_error::runtime_error;
+};
 class Pick
 {
 public:
@@ -299,7 +304,53 @@ private:
     }
     throw std::runtime_error("Table contact/level support not verified; refusing gripper open");
   }
-  void place(const Eigen::Vector3d & reference, const Eigen::Quaterniond & reference_angle)
+  Group::Plan planTableApproach(const Pose & preplace, const Pose & descent, bool alternate)
+  {
+    planning_scene::PlanningScene scene(arm_->getRobotModel());
+    require(scene.setPlanningSceneMsg(planningSceneSnapshot()), "Table probe scene import failed");
+    const auto * group = scene.getRobotModel()->getJointModelGroup("arm_1");
+    const auto valid = collisionCheck(scene);
+    Eigen::Isometry3d target = Eigen::Isometry3d::Identity();
+    target.translation() = point(preplace);
+    target.linear() = rotation(preplace).toRotationMatrix();
+    for (int attempt = 0; attempt < 12; ++attempt) {
+      auto state = scene.getCurrentState();
+      if (attempt > 0) {
+        state.setToRandomPositions(group);
+      }
+      if (!state.setFromIK(group, target, tcp_, 0.08, valid)) {
+        continue;
+      }
+      if (alternate && std::none_of(group->getVariableNames().begin(),
+          group->getVariableNames().end(), [&state, &scene](const std::string & joint) {
+          return std::abs(state.getVariablePosition(joint) -
+              scene.getCurrentState().getVariablePosition(joint)) >= 0.1;
+          }))
+      {
+        continue;
+      }
+      std::vector<moveit::core::RobotStatePtr> path;
+      if (!checkedFinePath(scene, state, descent, path)) {
+        continue;
+      }
+      std::vector<double> joints;
+      state.copyJointGroupPositions(group, joints);
+      if (!arm_->setJointValueTarget(joints)) {
+        continue;
+      }
+      arm_->setStartStateToCurrentState();
+      Group::Plan approach;
+      if (arm_->plan(approach) == moveit::core::MoveItErrorCode::SUCCESS) {
+        RCLCPP_INFO(node_->get_logger(), "TABLE DESCENT PROBE PASSED: candidate=%d points=%zu",
+          attempt + 1, path.size());
+        return approach;
+      }
+    }
+    throw std::runtime_error("No table approach with a complete collision-checked descent");
+  }
+  bool tryTableDescent(
+    const Eigen::Vector3d & reference, const Eigen::Quaterniond & reference_angle, bool alternate,
+    Pose & goal)
   {
     const auto box = stableBox();const auto tcp = arm_->getCurrentPose(tcp_).pose;
     syncHeldBox(box, tcp);
@@ -310,7 +361,7 @@ private:
     const double half = std::sqrt(0.5);
     const Eigen::Quaterniond desired_box(half, half, 0, 0);
     const Eigen::Quaterniond aligned = desired_box * relative_angle.inverse();
-    Pose goal = tcp;
+    goal = tcp;
     goal.orientation.w = aligned.w();goal.orientation.x = aligned.x();
     goal.orientation.y = aligned.y();goal.orientation.z = aligned.z();
     const Eigen::Vector3d pre_center(0, 0.05, 0.50);
@@ -319,7 +370,12 @@ private:
     RCLCPP_INFO(node_->get_logger(), "PLACE TOP-DOWN ALIGN AND APPROACH: box center z=0.500");
     arm_->setGoalPositionTolerance(0.00015);arm_->setGoalOrientationTolerance(0.0005);
     arm_->setMaxVelocityScalingFactor(0.05);arm_->setMaxAccelerationScalingFactor(0.05);
-    arm_->setPoseTarget(goal);executePlan();arm_->clearPoseTargets();
+    Pose descent = goal;
+    descent.position.z += 0.422 - pre_center.z();
+    arm_->setGoalJointTolerance(0.00005);
+    const auto approach = planTableApproach(goal, descent, alternate);
+    require(arm_->execute(approach) == moveit::core::MoveItErrorCode::SUCCESS,
+      "Table approach execution failed");
     waitAt(&goal, 0.0003, 0.0015);
     require(tilt(freshBox()) < 0.00873, "Box not parallel enough for descent");
     double drift = 0, angle = 0;
@@ -330,13 +386,33 @@ private:
     goal.position.y = current_tcp.position.y + 0.05 - current_box.position.y;
     goal.position.z = current_tcp.position.z + 0.422 - current_box.position.z;
     RCLCPP_INFO(node_->get_logger(), "PLACE DESCENT: box center z=0.422, then contact steps");
-    linear(goal, 0.02);waitAt(&goal, 0.0003, 0.0015);
+    try {
+      linear(goal, 0.02, true);
+    } catch (const FinePathRejected & error) {
+      RCLCPP_WARN(node_->get_logger(), "TABLE DESCENT PLAN REJECTED: %s", error.what());
+      return false;
+    }
+    waitAt(&goal, 0.0003, 0.0015);
+    return true;
+  }
+  void place(const Eigen::Vector3d & reference, const Eigen::Quaterniond & reference_angle)
+  {
+    Pose goal;
+    if (!tryTableDescent(reference, reference_angle, false, goal)) {
+      require(!supported(), "Unexpected table support before descent retry");
+      RCLCPP_WARN(node_->get_logger(),
+          "TABLE DESCENT RETRY: planning another preplace joint posture");
+      require(tryTableDescent(reference, reference_angle, true, goal),
+        "Table descent rejected again; gripper stays closed");
+      RCLCPP_INFO(node_->get_logger(), "TABLE DESCENT RETRY PASSED");
+    }
+    const auto aligned = rotation(goal);
     // Remain closed on the 40 mm cube, but remove most of the commanded
     // overclosure before the last 2 mm of seating. Both fingers stay below
     // 20 mm in the command; this does not request a clearance around the cube.
     const auto before_relax = freshBox();
     gripper(0.0198, true);
-    current_box = stableBox();current_tcp = arm_->getCurrentPose(tcp_).pose;
+    auto current_box = stableBox();auto current_tcp = arm_->getCurrentPose(tcp_).pose;
     RCLCPP_INFO(node_->get_logger(),
       "SEAT GRIP RELAX: shift=%.3f mm bottom_gap=%.3f mm box=(%.5f, %.5f, %.5f)",
       (point(current_box) - point(before_relax)).norm() * 1000,
@@ -508,7 +584,7 @@ private:
     require(planned, "Planning failed");
     require(arm_->execute(plan) == moveit::core::MoveItErrorCode::SUCCESS, "Execution failed");
   }
-  void finePath(const Pose & target, robot_trajectory::RobotTrajectory & trajectory)
+  moveit_msgs::msg::PlanningScene planningSceneSnapshot()
   {
     auto client = node_->create_client<moveit_msgs::srv::GetPlanningScene>("/get_planning_scene");
     require(client->wait_for_service(3s), "Fine path planning scene unavailable");
@@ -520,42 +596,75 @@ private:
       Components::LINK_PADDING_AND_SCALING;
     auto future = client->async_send_request(request);
     require(future.wait_for(5s) == std::future_status::ready, "Fine planning scene timed out");
-    planning_scene::PlanningScene scene(arm_->getRobotModel());
-    require(scene.setPlanningSceneMsg(future.get()->scene), "Fine planning scene import failed");
-    auto state = scene.getCurrentState();
+    return future.get()->scene;
+  }
+  moveit::core::GroupStateValidityCallbackFn collisionCheck(
+    const planning_scene::PlanningScene & scene)
+  {
+    return [&scene](moveit::core::RobotState * candidate,
+           const moveit::core::JointModelGroup * joints, const double * values) {
+             candidate->setJointGroupPositions(joints, values);
+             candidate->update();
+             return candidate->satisfiesBounds(joints) && !scene.isStateColliding(*candidate,
+          "arm_1");
+           };
+  }
+  bool checkedFinePath(
+    const planning_scene::PlanningScene & scene, moveit::core::RobotState state,
+    const Pose & target, std::vector<moveit::core::RobotStatePtr> & path, bool report = false)
+  {
     const auto * group = state.getJointModelGroup("arm_1");
     Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
     transform.translation() = point(target);
     transform.linear() = rotation(target).toRotationMatrix();
-    std::vector<moveit::core::RobotStatePtr> path;
-    const auto valid = [&scene](moveit::core::RobotState * candidate,
-      const moveit::core::JointModelGroup * joints, const double * values) {
-        candidate->setJointGroupPositions(joints, values);candidate->update();
-        return candidate->satisfiesBounds(joints) && !scene.isStateColliding(*candidate, "arm_1");
-      };
     const double fraction = moveit::core::CartesianInterpolator::computeCartesianPath(
       &state, group, path, state.getLinkModel(tcp_), transform, true,
       moveit::core::MaxEEFStep(0.0001), moveit::core::CartesianPrecision{0.00001, 0.0001, 0.00001},
-        valid, kinematics::KinematicsQueryOptions());
-    require(fraction >= 0.999 && path.size() >= 2, "Incomplete collision-checked fine path");
-    for (size_t i = 0; i < path.size(); ++i) {
-      if (i > 0) {
-        for (const auto & name : group->getVariableNames()) {
-          require(std::abs(path[i]->getVariablePosition(name) -
-            path[i - 1]->getVariablePosition(name)) < 0.02, "Joint jump in fine path");
+      collisionCheck(scene), kinematics::KinematicsQueryOptions());
+    if (fraction < 0.999 || path.size() < 2) {
+      if (report) {
+        RCLCPP_WARN(node_->get_logger(),
+          "FINE PATH INCOMPLETE: checked=%.2f%% points=%zu", 100.0 * fraction, path.size());
+      }
+      return false;
+    }
+    for (size_t i = 1; i < path.size(); ++i) {
+      for (const auto & name : group->getVariableNames()) {
+        const double jump = std::abs(path[i]->getVariablePosition(name) -
+          path[i - 1]->getVariablePosition(name));
+        if (jump >= 0.02) {
+          if (report) {
+            RCLCPP_WARN(node_->get_logger(),
+              "FINE PATH JOINT JUMP: joint=%s point=%zu delta=%.6f rad limit=0.020000 rad",
+              name.c_str(), i, jump);
+          }
+          return false;
         }
       }
-      trajectory.addSuffixWayPoint(*path[i], 0.0);
+    }
+    return true;
+  }
+  void finePath(const Pose & target, robot_trajectory::RobotTrajectory & trajectory)
+  {
+    planning_scene::PlanningScene scene(arm_->getRobotModel());
+    require(scene.setPlanningSceneMsg(planningSceneSnapshot()),
+        "Fine planning scene import failed");
+    std::vector<moveit::core::RobotStatePtr> path;
+    if (!checkedFinePath(scene, scene.getCurrentState(), target, path, true)) {
+      throw FinePathRejected("Incomplete collision-checked fine path or joint jump");
+    }
+    for (const auto & waypoint : path) {
+      trajectory.addSuffixWayPoint(*waypoint, 0.0);
     }
   }
 
-  void linear(const Pose & target, double scale = 0.1)
+  void linear(const Pose & target, double scale = 0.1, bool precise = false)
   {
     arm_->setStartStateToCurrentState();moveit_msgs::msg::RobotTrajectory msg;
     auto state = arm_->getCurrentState(2.0);
     require(static_cast<bool>(state), "No trajectory state");
     robot_trajectory::RobotTrajectory trajectory(arm_->getRobotModel(), "arm_1");
-    const bool fine = scale <= 0.01;
+    const bool fine = precise || scale <= 0.01;
     if (fine) {finePath(target, trajectory);} else {
       const double fraction = arm_->computeCartesianPath({target}, 0.002, msg, true);
       if (fraction < 0.999) {
