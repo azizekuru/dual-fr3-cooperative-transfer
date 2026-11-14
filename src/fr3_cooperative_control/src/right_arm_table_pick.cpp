@@ -491,15 +491,23 @@ private:
           moveit::core::MaxEEFStep(0.002), moveit::core::CartesianPrecision{}, valid,
           kinematics::KinematicsQueryOptions());
         if (fraction < 0.999 || reverse.empty()) {continue;}
-        for (double x : {0.0, 0.10, -0.10}) {
+        const std::array<Eigen::Vector3d, 6> midpoint_centers = {
+          Eigen::Vector3d(0.0, rack_y_ - 0.48, 0.59),
+          Eigen::Vector3d(0.10, rack_y_ - 0.48, 0.59),
+          Eigen::Vector3d(-0.10, rack_y_ - 0.48, 0.59),
+          Eigen::Vector3d(0.0, rack_y_ - 0.56, 0.64),
+          Eigen::Vector3d(0.10, rack_y_ - 0.56, 0.64),
+          Eigen::Vector3d(-0.10, rack_y_ - 0.56, 0.64)};
+        for (const auto & center : midpoint_centers) {
+          if (Wall::now() >= deadline) {break;}
           auto midpoint = front;
-          midpoint.translation() = Eigen::Vector3d(x, rack_y_ - 0.48, 0.59) - q * relative;
+          midpoint.translation() = center - q * relative;
           if (planShelfTransfer(*scene, *reverse.back(), midpoint, relative, relative_angle,
               transfer))
           {
             RCLCPP_INFO(node_->get_logger(),
-              "SHELF TWO-STAGE PLAN PASSED: variant=%zu midpoint_box=(%.3f, %.3f, 0.590)",
-              variant, x, rack_y_ - 0.48);
+              "SHELF TWO-STAGE PLAN PASSED: variant=%zu midpoint_box=(%.3f, %.3f, %.3f)",
+              variant, center.x(), center.y(), center.z());
             return q;
           }
           if (Wall::now() >= deadline) {break;}
@@ -542,29 +550,72 @@ private:
     {
       return false;
     }
+    const auto & start = scene.getCurrentState();
+    const auto & finish = *path.back();
     std::vector<double> joints;
-    path.back()->copyJointGroupPositions(group, joints);
+    finish.copyJointGroupPositions(group, joints);
     if (!arm_->setJointValueTarget(joints)) {return false;}
-    for (int route = 0; route < 3; ++route) {
-      arm_->setStartStateToCurrentState();
+
+    bool planned = planDirectShelfTurn(scene, finish, relative, relative_angle, transfer.turn);
+    for (int route = 0; !planned && route < 3; ++route) {
+      arm_->setStartState(start);
       if (arm_->plan(transfer.turn) != moveit::core::MoveItErrorCode::SUCCESS) {continue;}
-      if (!checkShelfTransfer(transfer.turn.trajectory, scene, relative, relative_angle,
-          rack_y_ - 0.40, "turn"))
-      {
-        continue;
-      }
-      transfer.midpoint.position.x = midpoint.translation().x();
-      transfer.midpoint.position.y = midpoint.translation().y();
-      transfer.midpoint.position.z = midpoint.translation().z();
-      const Eigen::Quaterniond angle(midpoint.rotation());
-      transfer.midpoint.orientation.w = angle.w();
-      transfer.midpoint.orientation.x = angle.x();
-      transfer.midpoint.orientation.y = angle.y();
-      transfer.midpoint.orientation.z = angle.z();
-      return true;
+      planned = checkShelfTransfer(transfer.turn.trajectory, scene, relative, relative_angle,
+          rack_y_ - 0.40, "turn");
     }
-    return false;
+    arm_->setStartStateToCurrentState();
+    if (!planned) {return false;}
+
+    transfer.midpoint.position.x = midpoint.translation().x();
+    transfer.midpoint.position.y = midpoint.translation().y();
+    transfer.midpoint.position.z = midpoint.translation().z();
+    const Eigen::Quaterniond angle(midpoint.rotation());
+    transfer.midpoint.orientation.w = angle.w();
+    transfer.midpoint.orientation.x = angle.x();
+    transfer.midpoint.orientation.y = angle.y();
+    transfer.midpoint.orientation.z = angle.z();
+    return true;
   }
+
+  bool planDirectShelfTurn(
+    const planning_scene::PlanningScene & scene, const moveit::core::RobotState & finish,
+    const Eigen::Vector3d & relative, const Eigen::Quaterniond & relative_angle, Group::Plan & plan)
+  {
+    const auto & start = scene.getCurrentState();
+    const auto * group = start.getJointModelGroup("arm_2");
+    double max_delta = 0.0;
+    for (const auto & name : group->getVariableNames()) {
+      max_delta = std::max(max_delta,
+          std::abs(finish.getVariablePosition(name) - start.getVariablePosition(name)));
+    }
+    const int steps = std::max(1, static_cast<int>(std::ceil(max_delta / 0.01)));
+    robot_trajectory::RobotTrajectory turn(arm_->getRobotModel(), group);
+    auto sample = start;
+    for (int i = 0; i <= steps; ++i) {
+      start.interpolate(finish, static_cast<double>(i) / steps, sample);
+      sample.update();
+      turn.addSuffixWayPoint(sample, 0.0);
+    }
+    moveit_msgs::msg::RobotTrajectory motion;
+    turn.getRobotTrajectoryMsg(motion);
+    if (!checkShelfTransfer(motion, scene, relative, relative_angle, rack_y_ - 0.40,
+        "direct-turn"))
+    {
+      return false;
+    }
+    trajectory_processing::TimeOptimalTrajectoryGeneration timing(0.00001, 0.01, 0.000001);
+    if (!timing.computeTimeStamps(turn, 0.06, 0.06)) {return false;}
+    turn.getRobotTrajectoryMsg(motion);
+    if (!checkShelfTransfer(motion, scene, relative, relative_angle, rack_y_ - 0.40,
+        "timed-turn"))
+    {
+      return false;
+    }
+    plan.trajectory = std::move(motion);
+    RCLCPP_INFO(node_->get_logger(), "SHELF DIRECT TURN SELECTED");
+    return true;
+  }
+
   bool onShelf()
   {
     safe();std::lock_guard<std::mutex> lock(mutex_);
