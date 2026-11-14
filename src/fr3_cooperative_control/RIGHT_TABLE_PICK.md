@@ -161,13 +161,16 @@ Yükseliş sonunda ölçülen eklem payı tekrar kontrol edilir. Yalnızca sağ 
 eklenebilir. Tam zincir başarı işareti FULL TRANSFER TEST PASSED, tekil modunki
 RIGHT SHELF PLACE SCENARIO PASSED olur.
 
-Sağ kol, son destek konumuna (kutu merkezi 0, 1.04, 0.4825 m) çarpışma kontrollü
+Sağ kol, son destek konumuna (varsayılan kutu merkezi 0, 1.09, 0.4825 m) çarpışma kontrollü
 IK ve ters Kartezyen yol ön kontrolü yapar. Önce yatay el yönü, gerekirse ters
 yatay ve üstten yön denenir. Aday yolda sağ kolun tüm eklemlerinin konum sınırlarına
 en az 0.05 rad pay bırakılır. Raf önündeki eklem duruşundan geriye doğru
 hesaplanan Kartezyen yol, kutu merkezinin raf merkezinden 0.48 m önce ve
-0.59 m yüksekte olduğu bir ara poza bağlanır. Sağ kol önce MoveIt planıyla
-bu ara poza gidip yönünü değiştirir. Tutuş ve kolun durulması doğrulanınca
+0.59 m yüksekte olduğu bir ara poza bağlanır. Bu konumda uygun rota bulunamazsa
+raf merkezinden 0.56 m önce ve 0.64 m yüksekteki ara pozlar da denenir.
+Sağ kol, mevcut eklem konumundan ara poza doğrudan eklem geçişi dener.
+Bu yol zamanlama öncesinde ve sonrasında rota kontrollerinden geçerse
+günlüğe SHELF DIRECT TURN SELECTED yazılır. Tutuş ve kolun durulması doğrulanınca
 daha önce denetlenmiş düz Kartezyen yol üzerinden raf önüne ilerler.
 Hareket başlamadan iki parça da kontrol edilir. Hiçbir aday kabul edilmezse kol hareket etmeden
 arama yeni rastgele IK tohumlarıyla bir kez daha yapılır (SHELF APPROACH SEARCH RETRY). Kutu merkezi yön değişiminde
@@ -179,9 +182,8 @@ kutu–el dönüşümü ve parmak teması 100 ms arayla izlenir. Kutu masa üst�
 45 mm'den çok yaklaşırsa, beklenmeyen temas kaydedilirse, kayma iki ardışık
 ölçümde sınırı aşarsa veya parmak teması kaybolursa hareket için durdurma
 isteği gönderilir ve raf girişine geçilmez.
-Aday ara poza ulaşmak için en çok üç rota denenir. Üçü de reddedilirse başka bir
-eklem çözümü denenir. Yalnızca seçilen plan
-yürütülür. Sensörden ölçülen kutu–el dönüşümüyle kalan hizalama hatası için
+Doğrudan geçiş kabul edilmezse MoveIt aynı ara poz için en çok üç genel rota
+dener. Uygun rota bulunamazsa başka bir eklem çözümü denenir. Sensörden ölçülen kutu–el dönüşümüyle kalan hizalama hatası için
 en fazla iki düzeltme yapılır. Küpün en yakın eksenlere paralel dönüşü seçilir.
 Açma öncesi eğim sınırı 0.5 derecedir.
 
@@ -193,12 +195,12 @@ kalır. shelf_hold modundaki tutmalar 3 saniyedir. Kolun durulması ardışık �
 sol ve sağ kol parkı da aynı ölçütü kullanır. Kutusuz park ve kavrama yaklaşımı hız/ivme
 ölçeği 0.40'tır; kutulu hareketlerin ölçekleri yukarıda yazıldığı gibidir.
 
-Raf konumu karşılaştırması için komuta shelf2_y:=1.15 veya shelf2_y:=1.25
-eklenebilir. Varsayılan raf merkezi y=1.20 m'dir. Gazebo ve MoveIt aynı raf
+Raf konumu karşılaştırması için komuta shelf2_y:=1.15 veya shelf2_y:=1.20
+eklenebilir. Varsayılan raf merkezi y=1.25 m'dir. Gazebo ve MoveIt aynı raf
 konumunu kullanır. Raf önü, taşıma sınırı ve bırakma hedefi rafla birlikte kayar.
 İzole sağ kol denemesi için ayrıca table_only:=true eklenir.
 
-Kutu 120 mm içeri, raf merkezinin 0.16 m önüne (varsayılan y=1.04 m) alınır ve
+Kutu 120 mm içeri, raf merkezinin 0.16 m önüne (varsayılan y=1.09 m) alınır ve
 z=0.4845 m merkez yüksekliğine indirilir. MoveIt zamanlaması bu iniş için
 başarısız olursa ham yolun seçilen noktaları arasında sıfır uç hız ve ivmeli
 beşinci dereceden geçişler kullanılır. Segment süreleri eklem hız ve ivme
@@ -233,6 +235,8 @@ Ready dönüşü yapılmaz; kuvvet kontrollü oturtma veya hareket sırasında
 kesintisiz otomatik durdurma garantisi yoktur.
 
 ## Hızlandırma denemeleri (tam zincir, headless)
+
+Bu bölümdeki ölçümler raf merkezi y=1.20 m iken (raf hedefi y=1.04 m) alınmıştır.
 
 Kutusuz park ve kavrama yaklaşımı 0.25'ten 0.40 hız/ivme ölçeğine çıkarıldı; kutulu
 hareketlerin ölçekleri değiştirilmedi. Üç tam zincir denemesi geçti: toplam süre

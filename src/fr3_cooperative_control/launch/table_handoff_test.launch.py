@@ -2,14 +2,14 @@
 import os
 import xml.etree.ElementTree as ET
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription, LogInfo,
                             OpaqueFunction, RegisterEventHandler)
 from launch.conditions import UnlessCondition
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 
@@ -21,7 +21,7 @@ def generate_launch_description():
                               choices=['pick', 'shelf_hold', 'shelf_place', 'left_park']),
         DeclareLaunchArgument('table_only', default_value='false',
                               choices=['true', 'false']),
-        DeclareLaunchArgument('shelf2_y', default_value='1.20',
+        DeclareLaunchArgument('shelf2_y', default_value='1.25',
                               choices=['1.15', '1.20', '1.25']),
         OpaqueFunction(function=setup),
     ])
@@ -92,6 +92,15 @@ def setup(context):
                   table_only.perform(context).lower() == 'true' else 'TABLE HANDOFF TEST PASSED')
         return [LogInfo(msg=marker)]
 
+    # Keep MoveGroup capabilities mapped through executor teardown on Jazzy.
+    # https://github.com/moveit/moveit2/issues/3680
+    move_group_library = os.path.join(get_package_prefix('moveit_ros_move_group'), 'lib',
+                                      'libmoveit_move_group_default_capabilities.so')
+    move_group_env = {
+        'LD_PRELOAD': [move_group_library, ' ',
+                       EnvironmentVariable('LD_PRELOAD', default_value='')]
+    } if os.path.isfile(move_group_library) else {}
+
     return [
         RegisterEventHandler(OnProcessExit(target_action=left_task, on_exit=after_left)),
         RegisterEventHandler(OnProcessExit(target_action=right_task, on_exit=after_right)),
@@ -105,6 +114,7 @@ def setup(context):
                     "'-r -s' if '", LaunchConfiguration('headless'), "' == 'true' else '-r'"])
             }.items()),
         Node(package='moveit_ros_move_group', executable='move_group', output='screen',
+             additional_env=move_group_env,
              parameters=[moveit.to_dict(), {
                  'use_sim_time': True,
                  'trajectory_execution.allowed_execution_duration_scaling': 15.0,
