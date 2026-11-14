@@ -191,7 +191,7 @@ public:
     arm_->setEndEffectorLink(tcp_);arm_->setPoseReferenceFrame("world");
     arm_->setPlanningTime(10);arm_->setNumPlanningAttempts(3);
     arm_->setGoalPositionTolerance(0.0005);arm_->setGoalOrientationTolerance(0.001);
-    arm_->setMaxVelocityScalingFactor(0.25);arm_->setMaxAccelerationScalingFactor(0.25);
+    arm_->setMaxVelocityScalingFactor(0.40);arm_->setMaxAccelerationScalingFactor(0.40);
     require(arm_->startStateMonitor(15) && left.startStateMonitor(15), "Robot state unavailable");
     scene_ = std::make_unique<moveit::planning_interface::PlanningSceneInterface>();
     require(scene_->getAttachedObjects({"target_box"}).empty(),
@@ -278,7 +278,7 @@ public:
     configureContacts(true, false);
     if (stage == "shelf_place") {
       raiseForShelfTransfer();
-      holdAt("RIGHT CLEARANCE", reference, reference_angle, drift, angle);
+      holdAt("RIGHT CLEARANCE", reference, reference_angle, drift, angle, 1.0);
       placeOnShelf(reference, reference_angle);
       return;
     }
@@ -469,40 +469,49 @@ private:
     const std::array<Eigen::Quaterniond, 3> nominal = {
       Eigen::Quaterniond(0.5, -0.5, -0.5, -0.5),
       Eigen::Quaterniond(0.5, -0.5, 0.5, 0.5), Eigen::Quaterniond(0, half, half, 0)};
-    const auto deadline = Wall::now() + 35s;
-    for (size_t variant = 0; variant < nominal.size(); ++variant) {
-      const Eigen::Quaterniond q = nearestCubeRotation(nominal[variant] * relative_angle) *
-        relative_angle.inverse();
-      Eigen::Isometry3d end = Eigen::Isometry3d::Identity();
-      end.linear() = q.toRotationMatrix();
-      end.translation() = Eigen::Vector3d(0, rack_y_ - 0.16, 0.4827) - q * relative;
-      Eigen::Isometry3d above = end;
-      above.translation().z() += 0.0798;
-      Eigen::Isometry3d front = above;
-      front.translation().y() -= 0.12;
-      for (int attempt = 0; attempt < 16 && Wall::now() < deadline; ++attempt) {
-        auto state = scene->getCurrentState();
-        if (attempt > 0) {state.setToRandomPositions(group);}
-        if (!state.setFromIK(group, end, tcp_, 0.08, valid)) {continue;}
-        std::vector<moveit::core::RobotStatePtr> reverse;
-        const EigenSTL::vector_Isometry3d waypoints = {above, front};
-        const double fraction = moveit::core::CartesianInterpolator::computeCartesianPath(
-          &state, group, reverse, state.getLinkModel(tcp_), waypoints, true,
-          moveit::core::MaxEEFStep(0.002), moveit::core::CartesianPrecision{}, valid,
-          kinematics::KinematicsQueryOptions());
-        if (fraction < 0.999 || reverse.empty()) {continue;}
-        for (double x : {0.0, 0.10, -0.10}) {
-          auto midpoint = front;
-          midpoint.translation() = Eigen::Vector3d(x, rack_y_ - 0.48, 0.59) - q * relative;
-          if (planShelfTransfer(*scene, *reverse.back(), midpoint, relative, relative_angle,
-              transfer))
-          {
-            RCLCPP_INFO(node_->get_logger(),
-              "SHELF TWO-STAGE PLAN PASSED: variant=%zu midpoint_box=(%.3f, %.3f, 0.590)",
-              variant, x, rack_y_ - 0.48);
-            return q;
+    // Planning only: the held box has not moved yet. If the first search finds no
+    // accepted approach, search once more with fresh random IK seeds.
+    for (int pass = 0; pass < 2; ++pass) {
+      if (pass > 0) {
+        RCLCPP_WARN(node_->get_logger(),
+          "SHELF APPROACH SEARCH RETRY: no accepted plan in pass 1, "
+          "searching again (planning only)");
+      }
+      const auto deadline = Wall::now() + 35s;
+      for (size_t variant = 0; variant < nominal.size(); ++variant) {
+        const Eigen::Quaterniond q = nearestCubeRotation(nominal[variant] * relative_angle) *
+          relative_angle.inverse();
+        Eigen::Isometry3d end = Eigen::Isometry3d::Identity();
+        end.linear() = q.toRotationMatrix();
+        end.translation() = Eigen::Vector3d(0, rack_y_ - 0.16, 0.4827) - q * relative;
+        Eigen::Isometry3d above = end;
+        above.translation().z() += 0.0798;
+        Eigen::Isometry3d front = above;
+        front.translation().y() -= 0.12;
+        for (int attempt = 0; attempt < 16 && Wall::now() < deadline; ++attempt) {
+          auto state = scene->getCurrentState();
+          if (attempt > 0 || pass > 0) {state.setToRandomPositions(group);}
+          if (!state.setFromIK(group, end, tcp_, 0.08, valid)) {continue;}
+          std::vector<moveit::core::RobotStatePtr> reverse;
+          const EigenSTL::vector_Isometry3d waypoints = {above, front};
+          const double fraction = moveit::core::CartesianInterpolator::computeCartesianPath(
+            &state, group, reverse, state.getLinkModel(tcp_), waypoints, true,
+            moveit::core::MaxEEFStep(0.002), moveit::core::CartesianPrecision{}, valid,
+            kinematics::KinematicsQueryOptions());
+          if (fraction < 0.999 || reverse.empty()) {continue;}
+          for (double x : {0.0, 0.10, -0.10}) {
+            auto midpoint = front;
+            midpoint.translation() = Eigen::Vector3d(x, rack_y_ - 0.48, 0.59) - q * relative;
+            if (planShelfTransfer(*scene, *reverse.back(), midpoint, relative, relative_angle,
+                transfer))
+            {
+              RCLCPP_INFO(node_->get_logger(),
+                "SHELF TWO-STAGE PLAN PASSED: pass=%d variant=%zu midpoint_box=(%.3f, %.3f, 0.590)",
+                pass + 1, variant, x, rack_y_ - 0.48);
+              return q;
+            }
+            if (Wall::now() >= deadline) {break;}
           }
-          if (Wall::now() >= deadline) {break;}
         }
       }
     }
@@ -643,7 +652,8 @@ private:
     executeShelfTransfer(transfer.turn.trajectory, relative, relative_angle);
     waitAt(&transfer.midpoint, 0.001, 0.005);
     double middle_drift = 0, middle_angle = 0;
-    holdAt("SHELF TRANSFER MIDPOINT", reference, reference_angle, middle_drift, middle_angle);
+    holdAt("SHELF TRANSFER MIDPOINT", reference, reference_angle, middle_drift, middle_angle,
+      1.5);
     RCLCPP_INFO(node_->get_logger(), "SHELF TRANSFER ADVANCE START");
     Pose goal = hand;bool level = false;
     for (int attempt = 0; attempt < 3; ++attempt) {
@@ -673,7 +683,8 @@ private:
       }
     }
     require(level, "Box not aligned at shelf front");
-    double drift = 0, angle = 0;holdAt("SHELF ALIGNED", reference, reference_angle, drift, angle);
+    double drift = 0, angle = 0;
+    holdAt("SHELF ALIGNED", reference, reference_angle, drift, angle, 1.0);
     box = freshBox();hand = arm_->getCurrentPose(tcp_).pose;syncHeldBox(box, hand);
     relative = rotation(hand).inverse() * (point(box) - point(hand));
     Eigen::Vector3d target = Eigen::Vector3d(0, rack_y_ - 0.16, 0.5625) - aligned * relative;
@@ -700,7 +711,9 @@ private:
       RCLCPP_INFO(node_->get_logger(), "SHELF SEAT step=%d gap=%.3f mm contact=%d", step,
           gap * 1000, onShelf());
       require(gap > -0.0003 && tilt(box) < 0.00873, "Shelf seating penetration/tilt too large");
-      if (onShelf() && std::abs(gap) < 0.001) {seated = true;break;}
+      // As on the left arm: a corner touch can report contact while the face still
+      // hovers. Count as seated only with contact AND a light press.
+      if (onShelf() && gap <= -0.000001) {seated = true;break;}
       if (gap <= 0.0) {waitShelfSupport();seated = true;break;}
       goal = arm_->getCurrentPose(tcp_).pose;
       goal.orientation.w = aligned.w();goal.orientation.x = aligned.x();
@@ -728,7 +741,7 @@ private:
     goal = arm_->getCurrentPose(tcp_).pose;goal.position.y -= 0.12;
     RCLCPP_INFO(node_->get_logger(),
         "SHELF RETREAT START: 120 mm at clearance height, no ready return");
-    linear(goal, 0.03);waitAt(&goal);
+    linear(goal, 0.10);waitAt(&goal);  // gripper open, above box
     const auto sim_start = node_->now();const auto wall_start = Wall::now();
     while ((node_->now() - sim_start).seconds() < 3.0) {
       require(Wall::now() - wall_start < 30s, "Shelf post-release clock timed out");
@@ -749,10 +762,11 @@ private:
 
   void holdAt(
     const char * label, const Eigen::Vector3d & reference,
-    const Eigen::Quaterniond & reference_angle, double & drift, double & angle)
+    const Eigen::Quaterniond & reference_angle, double & drift, double & angle,
+    double seconds = 3.0)
   {
     const auto sim_start = node_->now();const auto wall_start = Wall::now();
-    while ((node_->now() - sim_start).seconds() < 3.0) {
+    while ((node_->now() - sim_start).seconds() < seconds) {
       require(Wall::now() - wall_start < 30s, "Right carry hold clock timed out");safe();
       const auto box = freshBox();const auto hand = arm_->getCurrentPose(tcp_).pose;
       drift = std::max(drift,
@@ -846,8 +860,8 @@ private:
 
   Group::Plan planPark(Group & group, const moveit::core::RobotState * raised = nullptr)
   {
-    group.setMaxVelocityScalingFactor(0.25);
-    group.setMaxAccelerationScalingFactor(0.25);
+    group.setMaxVelocityScalingFactor(0.40);
+    group.setMaxAccelerationScalingFactor(0.40);
     group.setPlanningTime(10);
     group.setGoalJointTolerance(0.001);
     require(group.setJointValueTarget(ready_joints_), "Invalid parking target");
@@ -868,7 +882,7 @@ private:
   {
     auto previous = group.getCurrentJointValues();int calm = 0;const auto end = Wall::now() + 20s;
     while (Wall::now() < end) {
-      safe();std::this_thread::sleep_for(200ms);
+      safe();std::this_thread::sleep_for(100ms);  // with 0.0001 rad: same 1 mrad/s criterion
       auto state = group.getCurrentState(2.0);
       require(static_cast<bool>(state), "Parking state stale");
       std::vector<double> current;state->copyJointGroupPositions(group.getName(), current);
@@ -878,7 +892,7 @@ private:
         delta = std::max(delta, std::abs(current[i] - previous[i]));
         error = std::max(error, std::abs(current[i] - target[i]));
       }
-      calm = delta < 0.0002 && error < 0.001 ? calm + 1 : 0;previous = current;
+      calm = delta < 0.0001 && error < 0.001 ? calm + 1 : 0;previous = current;
       if (calm >= 3) {return;}
     }
     throw std::runtime_error("Arm failed to settle at parking waypoint");
@@ -1075,9 +1089,18 @@ private:
       std::vector<double> joints;
       state.copyJointGroupPositions(group, joints);
       if (!arm_->setJointValueTarget(joints)) {continue;}
-      arm_->setStartStateToCurrentState();
-      Group::Plan plan;
-      if (arm_->plan(plan) != moveit::core::MoveItErrorCode::SUCCESS) {continue;}
+      // As on the left arm: replan the same (nearby) candidate before falling back to a
+      // random IK seed, which tends to give low joint margins and long reconfigurations.
+      Group::Plan plan;bool planned = false;
+      for (int replan = 0; replan < 5 && !planned; ++replan) {
+        arm_->setStartStateToCurrentState();
+        planned = arm_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS;
+        if (!planned) {
+          RCLCPP_WARN(node_->get_logger(),
+            "RIGHT PICK REPLAN %d/5: candidate=%d plan rejected", replan + 1, attempt + 1);
+        }
+      }
+      if (!planned) {continue;}
       double minimum = jointLimitMargin(state, group);
       double wrist = wristMargin(state);
       for (const auto & waypoint : path) {
@@ -1172,6 +1195,29 @@ private:
       timed.getWayPointCount(), timed.getDuration());
     return timed;
   }
+  // TOTG occasionally fails numerically ("Negative path velocity") on dense fine
+  // paths. Retry the same geometric path with slightly different TOTG parameters;
+  // the endpoint/precision checks after timing still apply unchanged.
+  bool timeWithRetry(robot_trajectory::RobotTrajectory & trajectory, double scale, bool fine)
+  {
+    const robot_trajectory::RobotTrajectory original(trajectory, true);
+    const double tolerance = fine ? 0.00001 : 0.001, dt = fine ? 0.005 : 0.01,
+      angle = fine ? 0.000001 : 0.0001;
+    const std::array<std::array<double, 3>, 3> variants{{
+      {tolerance, dt, angle}, {2 * tolerance, dt, 10 * angle}, {0.5 * tolerance, 0.5 * dt, angle}}};
+    for (size_t i = 0; i < variants.size(); ++i) {
+      if (i > 0) {
+        trajectory = robot_trajectory::RobotTrajectory(original, true);
+        RCLCPP_WARN(node_->get_logger(), "TIMING RETRY %zu/%zu: TOTG failed, retrying with "
+          "tolerance=%.6f dt=%.4f", i, variants.size() - 1, variants[i][0], variants[i][1]);
+      }
+      trajectory_processing::TimeOptimalTrajectoryGeneration timing(
+        variants[i][0], variants[i][1], variants[i][2]);
+      if (timing.computeTimeStamps(trajectory, scale, scale)) {return true;}
+    }
+    trajectory = robot_trajectory::RobotTrajectory(original, true);
+    return false;
+  }
   void linear(const Pose & target, double scale = 0.1, LinearMode mode = LinearMode::normal)
   {
     safe();arm_->setStartStateToCurrentState();moveit_msgs::msg::RobotTrajectory msg;
@@ -1196,11 +1242,9 @@ private:
       RCLCPP_INFO(node_->get_logger(), "RAW FINE ENDPOINT: error=%.4f mm",
         1000 * (raw.translation() - point(target)).norm());
     }
-    trajectory_processing::TimeOptimalTrajectoryGeneration timing(
-      fine ? 0.00001 : 0.001, fine ? 0.005 : 0.01, fine ? 0.000001 : 0.0001);
     std::optional<robot_trajectory::RobotTrajectory> raw;
     if (mode == LinearMode::shelf_descent) {raw.emplace(trajectory, true);}
-    if (!timing.computeTimeStamps(trajectory, scale, scale)) {
+    if (!timeWithRetry(trajectory, scale, fine)) {
       require(raw.has_value(), "Trajectory timing failed");
       RCLCPP_WARN(node_->get_logger(), "SHELF DESCENT TIMING FALLBACK: validating saved path");
       trajectory = timeShelfDescent(*raw, scale);
@@ -1222,9 +1266,22 @@ private:
   }
   Pose freshBox()
   {
-    std::lock_guard<std::mutex> lock(mutex_);
-    require(sequence_ > 0 && Wall::now() - box_received_ < 2s, "Physical box pose stale/missing");
-    return box_;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (sequence_ > 0 && Wall::now() - box_received_ < 2s) {return box_;}
+    }
+    // Transient bridge gap: wait up to 3 s more for a NEW pose; never use the stale one.
+    RCLCPP_WARN(node_->get_logger(), "BOX POSE STALE: waiting up to 3 s for a fresh Gazebo pose");
+    const auto end = Wall::now() + 3s;
+    while (Wall::now() < end) {
+      std::this_thread::sleep_for(50ms);
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (sequence_ > 0 && Wall::now() - box_received_ < 200ms) {
+        RCLCPP_WARN(node_->get_logger(), "BOX POSE RECOVERED");
+        return box_;
+      }
+    }
+    throw std::runtime_error("Physical box pose stale/missing");
   }
   Pose stableBox()
   {
@@ -1254,7 +1311,8 @@ private:
     int still = 0;
     const auto end = Wall::now() + 20s;
     while (Wall::now() < end) {
-      std::this_thread::sleep_for(200ms);
+      // 100 ms samples with 0.0001 rad: same 1 mrad/s settle criterion as before.
+      std::this_thread::sleep_for(100ms);
       auto state = arm_->getCurrentState(2.0);
       require(static_cast<bool>(state), "Fresh arm state missing");
       std::vector<double> current;state->copyJointGroupPositions("arm_2", current);
@@ -1271,7 +1329,7 @@ private:
         angle_error = Eigen::Quaterniond(actual.rotation()).angularDistance(rotation(*target));
         near = position_error < position_tolerance && angle_error < angle_tolerance;
       }
-      still = delta < 0.0002 ? still + 1 : 0;
+      still = delta < 0.0001 ? still + 1 : 0;
       calm = still > 0 && near ? calm + 1 : 0;
       previous = current;
       if (calm >= 3) {return;}

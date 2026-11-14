@@ -23,9 +23,15 @@ masa normaline en yakın olanıyla ölçülür. Bu seçim farklı boyutlu nesnel
 Ön yerleştirme merkez yüksekliği 0.50 m'dir. Kol hareket etmeden önce aday eklem
 pozundan 0.422 m'ye kadar düz Kartezyen iniş çarpışma ve eklem sıçraması açısından
 denetlenir. İniş veya aday poza ulaşan MoveIt rotası doğrulanamazsa başka bir
-eklem çözümü denenir. Seçilen yaklaşım hız/ivme ölçeği 0.05 ile yürütülür.
-TCP yakınlığı 0.3 mm ve 0.0015 rad koşullarıyla beklenir. Kutu eğimi 0.5 derecenin
-altına inmelidir. Gerçek iniş ölçülen kutu ve eklem durumundan tekrar hesaplanır,
+eklem çözümü denenir; 12 adayın hiçbiri geçmezse kol hareket etmeden arama yeni rastgele
+tohumlarla bir kez tekrarlanır (TABLE APPROACH SEARCH RETRY). Bir adayın MoveIt planı
+reddedilirse rastgele duruşa geçmeden önce aynı aday en çok 5 kez yeniden planlanır
+(TABLE APPROACH REPLAN); uzak duruşa geçiş, tutulan kutuyu döndürebilen uzun bir hareket demektir.
+Gazebo kutu pozu 2 s gelmezse en çok 3 s daha yeni poz beklenir (BOX POSE STALE/RECOVERED);
+eski poz hiçbir zaman kullanılmaz. Seçilen yaklaşım hız/ivme ölçeği 0.08 ile yürütülür.
+TCP yakınlığı 0.3 mm ve 0.0015 rad koşullarıyla beklenir. Kutu eğimi, elde sallanma durulduktan sonra
+ölçülür ve 0.5 derecenin altında olmalıdır (PREPLACE TILT). Ön yerleştirme pozunda kutu–el dönüşümü 1 simülasyon saniyesi
+izlenir (PREPLACE); kayma ve açı sınırları değişmez. Gerçek iniş ölçülen kutu ve eklem durumundan tekrar hesaplanır,
 hız/ivme ölçeği 0.02 ile yürütülür ve merkez 0.422 m'ye getirilir. Masa yüzeyi
 MoveIt world içinde 0.40 m'dir. Gazebo dünya yüksekliği 0.05 m daha fazladır.
 
@@ -40,7 +46,13 @@ Son inişin 2 mm açıklığında, kapalı gripper hedefi 0.018 m yerine 0.0198 
 çekilir. Bu hâlâ kutunun 0.020 m yarı genişliğinden küçüktür; açık çene boşluğu
 istenmez. Bu geçişte gerçek kutunun konum değişimi ve alt yüzey aralığı ayrıca
 raporlanır; değişim 3 mm'yi aşarsa test durur. Ardından planlanan kutu pozu tekrar
-eşitlenir. Son oturtma adımları en çok 0.5 mm'dir. Fiziksel kutunun en alt noktası ölçülen
+eşitlenir. Son oturtma adımları en çok 0.5 mm'dir. Kutu masanın 0.15 mm yakınında olup
+oturmamışsa en çok 3 kez son küçük iniş (aralık + 0.1 mm, en fazla 0.2 mm; SEAT FINAL NUDGE n/3)
+yapılır; tutulan kutu kendi ağırlığıyla inemediğinden yalnızca beklemek temas oluşturmaz.
+Oturma için temas ve hafif baskı (alt aralık ≤ -0.001 mm) birlikte gerekir; havadaki köşe
+teması oturma sayılmaz. 3 inişten sonra destek doğrulamasına geçilir. Destek doğrulaması
+başarısız olursa SUPPORT DIAG satırı hangi koşulun (temas yaşı, aralık, eğim) bozulduğunu yazar;
+doğrulama sırasında sayaç sıfırlanırsa SUPPORT RESET satırı kaydedilir. Fiziksel kutunun en alt noktası ölçülen
 dönüşten hesaplanır. Tahmini masa penetrasyonu 0.3 mm'den fazlaysa devam edilmez.
 Yalnızca planlamadaki kutu–masa teması serbest bırakılır; robot–masa kontrolleri değişmez.
 Bu, Gazebo nesnesini sabitlemez veya masaya attach etmez.
@@ -134,3 +146,20 @@ Beş denemede gözlenen başarı 5/5; en büyük XY hatası 2.050 mm, açma sonr
 konum değişimi 0.215 mm oldu. Her son kutu merkez yüksekliği 0.420 m raporlandı.
 Bu örneklemde gözlenen sonuçlar genel başarı oranı garantisi olarak yorumlanmamalıdır.
 Yaklaşık 2 mm tekrarlayan hedef ofseti, açma sonrası kaymadan ayrı değerlendirilmelidir.
+
+## Taşıma güvenliği (sağ kolla simetrik)
+
+Kavrama sonrası 3 saniyelik tutma doğrulandıktan sonra kutu "taşınıyor" sayılır. Bu sırada
+kutunun parmaklar dışındaki herhangi bir şeye teması (oturtma başladıktan sonra masa üstü hariç)
+UNEXPECTED CARRY CONTACT olarak kaydedilir ve bir sonraki hareketten önce test durur. Masa
+taşıması ve masa üstüne yaklaşma hareketleri yürütülürken kutu 100 ms'de bir örneklenir
+(TABLE TRANSFER / TABLE APPROACH MONITOR): masa alanı üzerinde kutunun altı 0.41 m'nin altına
+inerse, parmak teması 1 s kesilirse veya ardışık iki örnekte 15 mm / 10 derecelik kaba kayma
+görülürse kol durdurulur. En büyük örneklenen kayma ve açı her harekette raporlanır.
+
+Taşıma ve masa üstüne yaklaşma planları yürütülmeden önce ayrıca denetlenir (CLEARANCE):
+masa alanı üzerinde kutunun altı ≥ 0.43 m, kutu ile shelf_1 dikmeleri ve rafları arası ≥ 15 mm olmalıdır.
+Oturtma sırasında tek ölçümde eğim 0.5 dereceyi aşarsa kutunun durulması beklenip yeniden ölçülür (SEAT TILT TRANSIENT).
+Gripper açılmadan önceki destek doğrulamasında kutu bastırıldıktan sonra geri yaylanıp temassız
+asılı kalırsa (1 sim s, aralık -0.05…+0.15 mm) en çok iki kez en fazla 0.1 mm yeniden bastırılır
+(SUPPORT RESEAT n/2). Açma sonrasındaki doğrulamada kol hareket ettirilmez.

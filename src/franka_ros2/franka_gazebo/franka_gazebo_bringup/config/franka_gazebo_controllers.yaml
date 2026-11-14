@@ -1,7 +1,7 @@
 controller_manager:
   ros__parameters:
     update_rate: 1000  # Hz
-    position_proportional_gain: 0.002
+    position_proportional_gain: 0.004
 
     joint_position_example_controller:
       type: franka_example_controllers/JointPositionExampleController

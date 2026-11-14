@@ -14,8 +14,8 @@ MoveIt dünya koordinatına geçerken robotun 0.05 m spawn yüksekliği çıkar�
 Sol kol ready, ön poz ve kavrama hedefinden geçer. Kavrama hedefi kutu merkezidir.
 
 Gripper kapanmadan önce güncel eklem durumundan hesaplanan TCP hedefe 3 mm ve
-0.025 rad içinde olmalıdır. Ardışık üç 200 ms ölçümde eklem değişimi 0.0002 rad
-altında olmalıdır. Bekleme 20 duvar saati saniyesinde başarısız olur; sonraki harekete geçilmez.
+0.025 rad içinde olmalıdır. Ardışık üç 100 ms ölçümde eklem değişimi 0.0001 rad
+altında olmalıdır (yaklaşık 1 mrad/s). Bekleme 20 duvar saati saniyesinde başarısız olur; sonraki harekete geçilmez.
 Kontrolcü SUCCEEDED sonucu tek başına yeterli sayılmaz.
 
 Gripper önce 0.04 m açılır, sonra 0.018 m tek-parmak hedefiyle kapanır. Kutuyla engellenen
@@ -74,9 +74,17 @@ ros2 launch fr3_cooperative_control single_arm_pick_test.launch.py stage:=transf
 
 Önce eski simülasyonu kapatın. Varsayılan stage:=pick akışı korunur. Transfer modu
 aynı kavrama ve kaldırma kontrollerinden sonra, aynı el yönüyle 120 mm raftan
-geri çekilir. Hedefte durulur ve kutunun ele göre konum/yönelim değişimi 3 simülasyon
-saniyesi boyunca kontrol edilir. Ardından el yönü masaya uygun (-0.5, -0.5, -0.5, 0.5)
+geri çekilir. Hedefte durulur ve kutunun ele göre konum/yönelim değişimi 1 simülasyon
+saniyesi boyunca kontrol edilir (AFTER RETRACT). Kaldırma sonrası tutma ve masanın
+üzerindeki tutma 3 saniye kalır; kayma bu iki noktada yakalanmıştır. Ardından el yönü masaya uygun (-0.5, -0.5, -0.5, 0.5)
 quaternionuna değiştirilerek çarpışma kontrollü plan yürütülür. Taşıma hız/ivme ölçeği 0.10'dur.
+MoveIt'in son yol doğrulaması (ValidateSolution) bir planı reddederse en çok 10 kez
+yeniden planlanır (PLAN ATTEMPT n/10); çarpışma doğrulaması değişmez.
+Taşıma planı ayrıca yürütülmeden önce denetlenir: kutu masa alanının (30 mm payla genişletilmiş
+0.8 x 0.6 m) üzerindeyken kutunun en alt köşesi masa üstünden en az 30 mm yukarıda (z ≥ 0.43 m)
+kalmalıdır; kutu ile shelf_1 dikmeleri ve rafları arasında en az 15 mm boşluk olmalıdır
+(TABLE TRANSFER CLEARANCE OK/REJECTED). Sağlamayan plan reddedilip yeniden planlanır.
+Kartezyen yolların zaman parametrelemesi (TOTG) sayısal olarak başarısız olursa ("Negative path velocity") aynı geometrik yol biraz farklı TOTG parametreleriyle en çok iki kez daha zamanlanır (TIMING RETRY n/2); uç nokta hassasiyet kontrolleri değişmez.
 Bu yol boyunca el yönü sabit değildir; raf ve masa için gereken iki yön arasında geçiş yapılır.
 
 Hedef kutu merkezi MoveIt world çerçevesinde (0, 0.05, 0.60) m'dir; merkez masa

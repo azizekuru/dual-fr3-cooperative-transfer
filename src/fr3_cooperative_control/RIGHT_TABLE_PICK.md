@@ -169,7 +169,8 @@ hesaplanan Kartezyen yol, kutu merkezinin raf merkezinden 0.48 m önce ve
 0.59 m yüksekte olduğu bir ara poza bağlanır. Sağ kol önce MoveIt planıyla
 bu ara poza gidip yönünü değiştirir. Tutuş ve kolun durulması doğrulanınca
 daha önce denetlenmiş düz Kartezyen yol üzerinden raf önüne ilerler.
-Hareket başlamadan iki parça da kontrol edilir. Kutu merkezi yön değişiminde
+Hareket başlamadan iki parça da kontrol edilir. Hiçbir aday kabul edilmezse kol hareket etmeden
+arama yeni rastgele IK tohumlarıyla bir kez daha yapılır (SHELF APPROACH SEARCH RETRY). Kutu merkezi yön değişiminde
 raf dikmelerinin en az 200 mm, ilerleme sırasında en az 50 mm önünde kalır.
 Her eklemin sınır payı ve kutunun döndürülmüş alt köşesinin masa üstünden en
 az 80 mm yukarıda kalması rotanın noktalarında kontrol edilir. Raf önüne
@@ -183,6 +184,14 @@ eklem çözümü denenir. Yalnızca seçilen plan
 yürütülür. Sensörden ölçülen kutu–el dönüşümüyle kalan hizalama hatası için
 en fazla iki düzeltme yapılır. Küpün en yakın eksenlere paralel dönüşü seçilir.
 Açma öncesi eğim sınırı 0.5 derecedir.
+
+Bu modda kutulu ara tutmalar kısadır: ek yükseliş sonrası (RIGHT CLEARANCE) 1,
+yön değişimi sonrası (SHELF TRANSFER MIDPOINT) 1.5 ve hizalama sonrası (SHELF ALIGNED)
+1 simülasyon saniyesi. Kapanma sonrası tutma ve bırakma sonrası son kontrol 3 saniye
+kalır. shelf_hold modundaki tutmalar 3 saniyedir. Kolun durulması ardışık üç 100 ms
+ölçümde eklem değişiminin 0.0001 rad altında kalmasıyla kabul edilir (yaklaşık 1 mrad/s);
+sol ve sağ kol parkı da aynı ölçütü kullanır. Kutusuz park ve kavrama yaklaşımı hız/ivme
+ölçeği 0.40'tır; kutulu hareketlerin ölçekleri yukarıda yazıldığı gibidir.
 
 Raf konumu karşılaştırması için komuta shelf2_y:=1.15 veya shelf2_y:=1.25
 eklenebilir. Varsayılan raf merkezi y=1.20 m'dir. Gazebo ve MoveIt aynı raf
@@ -222,3 +231,40 @@ desteği, 3 mm XY hata, 1 mm merkez yükseklik hatası, 1 derece eğim ve
 açma öncesinden itibaren 2 mm konum değişimi sınırları kontrol edilir.
 Ready dönüşü yapılmaz; kuvvet kontrollü oturtma veya hareket sırasında
 kesintisiz otomatik durdurma garantisi yoktur.
+
+## Hızlandırma denemeleri (tam zincir, headless)
+
+Kutusuz park ve kavrama yaklaşımı 0.25'ten 0.40 hız/ivme ölçeğine çıkarıldı; kutulu
+hareketlerin ölçekleri değiştirilmedi. Üç tam zincir denemesi geçti: toplam süre
+264, 266 ve 280 s (sol 116–119 s, sağ 145–164 s). 280 s'lik denemede planlayıcı farklı
+bir eklem çözümü ve ara poz seçti, yön değişimi 28 s sürdü (diğerlerinde 15–16 s).
+
+Ardından ara tutmalar kısaltıldı ve durulma örneklemesi 100 ms / 0.0001 rad yapıldı.
+İki tam zincir denemesi geçti: toplam süre 241 ve 260 s (sol 108 ve 113 s, sağ 133 ve 147 s).
+
+| Ölçüm | Hız artışı sonrası (3 deneme) | Bekleme kısaltma sonrası (2 deneme) | Sınır |
+|---|---|---|---|
+| Sol yerleştirme XY hatası | 0.09–0.45 mm | 0.10–2.03 mm | 3 mm |
+| Sağ kaldırma sonrası göreli kayma | 0.006–0.067 mm | 0.006 mm | 5 mm |
+| Yön değişiminde örneklenen en büyük kayma | 4.5–5.4 mm | 4.9–6.1 mm | 8 mm (iki ardışık örnek) |
+| Hizalama tutmasında göreli kayma | 2.02 mm | 2.02–2.03 mm | 5 mm |
+| Raf XY hatası | 1.95–2.09 mm | 1.97–2.08 mm | 3 mm |
+| Açma sonrası değişim | 0.15–0.22 mm | 0.17–0.22 mm | 2 mm |
+
+Sol yerleştirmedeki 2.03 mm, kavrama sırasında oluşan ve önceki denemelerde de görülen
+yaklaşık 2 mm'lik ilk kaymadan kaynaklanır (o denemede kaldırma tutması 2.014 mm).
+Yön değişimindeki anlık kayma seçilen ara poza göre değişir ve en dar paydır; bu hareketin
+hızı artırılmamalıdır. Beş başarılı deneme uzun süreli başarı oranı garantisi değildir.
+
+Sonraki sağlamlık eklemeleriyle (aşağıda) ve simülasyon gerçek zamanlı hızda (RTF ≈ 1.0) çalışırken tam zincir süresi tipik olarak 200–230 s oldu. Dizüstü bilgisayar pilde ve güç tasarrufu modundayken RTF yaklaşık 0.5'e düşer ve süre buna göre uzar.
+
+## Sağlamlık kontrolleri
+
+Raf oturtmasında kutu, sol koldaki gibi ancak temas ve hafif baskı (alt aralık ≤ -0.001 mm)
+birlikte varsa oturmuş sayılır; köşe teması oturma sayılmaz. Gazebo kutu pozu 2 s gelmezse
+en çok 3 s daha yeni poz beklenir (BOX POSE STALE/RECOVERED).
+
+Sağ kol masadan kavrama adayı için MoveIt planı reddedilirse rastgele duruşa geçmeden önce aynı aday
+en çok 5 kez yeniden planlanır (RIGHT PICK REPLAN n/5).
+
+Kartezyen yolların zaman parametrelemesi (TOTG) sayısal olarak başarısız olursa ("Negative path velocity") aynı geometrik yol biraz farklı TOTG parametreleriyle en çok iki kez daha zamanlanır (TIMING RETRY n/2); uç nokta hassasiyet kontrolleri değişmez.

@@ -5,7 +5,10 @@
 #include <vector>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <functional>
 #include <future>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -89,8 +92,23 @@ public:
           a.find("left_fr3v2_rightfinger") != std::string::npos ||
           b.find("left_fr3v2_leftfinger") != std::string::npos ||
           b.find("left_fr3v2_rightfinger") != std::string::npos;
+          for (size_t i = 0; i < 2; ++i) {
+            const std::string name = i == 0 ? "left_fr3v2_leftfinger" : "left_fr3v2_rightfinger";
+            if (a.find(name) != std::string::npos || b.find(name) != std::string::npos) {
+              finger_contact_[i] = Wall::now();
+            }
+          }
           if (!table && !finger && (a.find("fr3v2") != std::string::npos ||
           b.find("fr3v2") != std::string::npos)) {unexpected_box_contact_ = true;}
+          // Same rule as the right arm: while carrying, anything except the fingers
+          // (and the tabletop once seating has started) is an unexpected contact.
+          if (carrying_ && !finger && !(seating_ && table)) {
+            if (!carry_contact_) {
+              RCLCPP_ERROR(node_->get_logger(), "UNEXPECTED CARRY CONTACT: %s <-> %s",
+                a.c_str(), b.c_str());
+            }
+            carry_contact_ = true;
+          }
           bool vertical = false;
           for (const auto & n : contact.normals) {vertical = vertical || std::abs(n.z) > 0.8;}
           double depth = 0;
@@ -154,7 +172,8 @@ public:
     arm_->setEndEffectorLink(tcp_);arm_->setPoseReferenceFrame("world");
     arm_->setPlanningTime(10);arm_->setNumPlanningAttempts(3);
     arm_->setGoalPositionTolerance(0.002);arm_->setGoalOrientationTolerance(0.01);
-    arm_->setMaxVelocityScalingFactor(0.25);arm_->setMaxAccelerationScalingFactor(0.25);
+    // Boxless motions only (ready and pregrasp); carry motions set their own lower scales.
+    arm_->setMaxVelocityScalingFactor(0.40);arm_->setMaxAccelerationScalingFactor(0.40);
     require(arm_->startStateMonitor(15), "Robot state unavailable");
     scene_ = std::make_unique<moveit::planning_interface::PlanningSceneInterface>();
     require(scene_->getAttachedObjects({"target_box"}).empty(), "Restart simulation: box attached");
@@ -220,10 +239,11 @@ public:
       "PICK TEST PASSED: lift=%.2f mm hold=3 sim s drift=%.3f mm angle=%.3f deg; gripper stays closed",
       rise * 1000, max_drift * 1000, max_angle * 180 / M_PI);
     if (stage == "pick") {return;}
+    {std::lock_guard<std::mutex> lock(mutex_);carrying_ = true;}
     RCLCPP_INFO(node_->get_logger(), "TRANSFER RETRACT START: 120 mm, gripper stays closed");
     Pose clear = lifted;clear.position.y += 0.12;
     linear(clear);waitAt(&clear);
-    holdTransferred("AFTER RETRACT", reference, reference_angle, max_drift, max_angle);
+    holdTransferred("AFTER RETRACT", reference, reference_angle, max_drift, max_angle, 1.0);
     // The shelf and table face opposite sides of the arm. Change hand orientation
     // during the collision-checked transfer; preserve the measured grasp transform.
     Pose table = clear;
@@ -234,7 +254,15 @@ public:
     table.position.x = target.x();table.position.y = target.y();table.position.z = target.z();
     arm_->setMaxVelocityScalingFactor(0.10);arm_->setMaxAccelerationScalingFactor(0.10);
     RCLCPP_INFO(node_->get_logger(), "TABLE TRANSFER START: box target=(0.000, 0.050, 0.600)");
-    arm_->setPoseTarget(table);executePlan();arm_->clearPoseTargets();waitAt(&table);
+    const auto clear_of_table = [this, &reference, &reference_angle](const Group::Plan & plan) {
+        return carryClearance(plan, reference, reference_angle, "TABLE TRANSFER");
+      };
+    arm_->setPoseTarget(table);
+    executePlan(clear_of_table, [this, &reference, &reference_angle](const Group::Plan & plan) {
+        executeMonitored(plan.trajectory, "TABLE TRANSFER", reference, reference_angle);
+      });
+    arm_->clearPoseTargets();
+    waitAt(&table);
     holdTransferred("ABOVE TABLE", reference, reference_angle, max_drift, max_angle);
     const auto placed = freshBox();
     const double center_error = (point(placed) - desired_center).norm();
@@ -284,27 +312,77 @@ private:
     attached.object.primitives.push_back(primitive);attached.object.primitive_poses.push_back(p);
     require(scene_->applyAttachedCollisionObject(attached), "Cannot synchronize held planning box");
   }
-  void waitSupport()
+  // Diagnostic only: which part of supported() is currently false.
+  std::string supportDiagnosis()
   {
-    const auto deadline = Wall::now() + 15s;
-    int64_t since = -1;
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto wall = Wall::now();
+    auto age = [&](const Wall::time_point & t) {
+        return std::chrono::duration<double>(wall - t).count();
+      };
+    char text[256];
+    std::snprintf(text, sizeof(text),
+      "box_sensor(seen=%d wall_age=%.2fs sim_age=%.2fs) table_sensor(seen=%d wall_age=%.2fs)",
+      support_seen_, support_seen_ ? age(support_wall_) : -1.0,
+      support_seen_ ? (node_->now().nanoseconds() - support_sim_) * 1e-9 : -1.0,
+      table_support_seen_, table_support_seen_ ? age(table_support_wall_) : -1.0);
+    return text;
+  }
+  void waitSupport(bool reseat = false)
+  {
+    auto deadline = Wall::now() + 15s;
+    int64_t since = -1, hover_since = -1;int reseats = 0;
+    int samples = 0, resets = 0, no_contact = 0, bad_gap = 0, bad_tilt = 0;
+    double last_gap = 0, last_tilt = 0;
     while (Wall::now() < deadline) {
       const auto box = freshBox();
-      const bool good = supported() && std::abs(bottom(box) - 0.4) < 0.001 &&
-        tilt(box) < 0.00873;
+      const bool contact = supported();
+      const bool gap_ok = std::abs(bottom(box) - 0.4) < 0.001;
+      const bool tilt_ok = tilt(box) < 0.00873;
+      const bool good = contact && gap_ok && tilt_ok;
+      ++samples;no_contact += !contact;bad_gap += !gap_ok;bad_tilt += !tilt_ok;
+      if (!good && since >= 0) {
+        ++resets;
+        RCLCPP_WARN(node_->get_logger(),
+          "SUPPORT RESET: contact=%d gap=%.3f mm tilt=%.3f deg %s", contact,
+          (bottom(box) - 0.4) * 1000, tilt(box) * 180 / M_PI, supportDiagnosis().c_str());
+      }
+      last_gap = bottom(box) - 0.4;last_tilt = tilt(box);
       const auto now = node_->now().nanoseconds();
+      // The held box can rebound and hang a few micrometres above the table after the
+      // press; it cannot drop by itself. If it hovers without contact for 1 sim s, make a
+      // bounded small re-press (gap + 0.05 mm, at most 0.1 mm, at most twice; gripper closed).
+      const bool hovering = !contact && tilt_ok && last_gap > -0.00005 && last_gap < 0.00015;
+      hover_since = hovering ? (hover_since < 0 ? now : hover_since) : -1;
+      if (reseat && hovering && reseats < 2 && now - hover_since >= 1000000000) {
+        const double step_down = std::min(0.0001, last_gap + 0.00005);
+        ++reseats;
+        RCLCPP_WARN(node_->get_logger(),
+          "SUPPORT RESEAT %d/2: no contact for 1 sim s at gap=%.3f mm, descending %.3f mm",
+          reseats, last_gap * 1000, step_down * 1000);
+        auto goal = arm_->getCurrentPose(tcp_).pose;goal.position.z -= step_down;
+        linear(goal, 0.01);waitAt(&goal, 0.00015, 0.0015);
+        since = -1;hover_since = -1;deadline = Wall::now() + 15s;
+        continue;
+      }
       if (!good) {since = -1;} else if (since < 0) {
         since = now;
       } else if (now - since >= 1000000000) {
         RCLCPP_INFO(node_->get_logger(),
-            "SUPPORT VERIFIED: 1 sim s table contact, bottom_gap=%.3f mm",
-          (bottom(box) - 0.4) * 1000);return;
+            "SUPPORT VERIFIED: 1 sim s table contact, bottom_gap=%.3f mm (samples=%d resets=%d)",
+          (bottom(box) - 0.4) * 1000, samples, resets);return;
       }
       std::this_thread::sleep_for(100ms);
     }
+    RCLCPP_ERROR(node_->get_logger(),
+      "SUPPORT DIAG: samples=%d resets=%d no_contact=%d bad_gap=%d bad_tilt=%d "
+      "last gap=%.3f mm tilt=%.3f deg %s", samples, resets, no_contact, bad_gap, bad_tilt,
+      last_gap * 1000, last_tilt * 180 / M_PI, supportDiagnosis().c_str());
     throw std::runtime_error("Table contact/level support not verified; refusing gripper open");
   }
-  Group::Plan planTableApproach(const Pose & preplace, const Pose & descent, bool alternate)
+  Group::Plan planTableApproach(
+    const Pose & preplace, const Pose & descent, bool alternate,
+    const Eigen::Vector3d & relative, const Eigen::Quaterniond & relative_angle)
   {
     planning_scene::PlanningScene scene(arm_->getRobotModel());
     require(scene.setPlanningSceneMsg(planningSceneSnapshot()), "Table probe scene import failed");
@@ -313,37 +391,56 @@ private:
     Eigen::Isometry3d target = Eigen::Isometry3d::Identity();
     target.translation() = point(preplace);
     target.linear() = rotation(preplace).toRotationMatrix();
-    for (int attempt = 0; attempt < 12; ++attempt) {
-      auto state = scene.getCurrentState();
-      if (attempt > 0) {
-        state.setToRandomPositions(group);
+    // Planning only: if every candidate fails, search once more with fresh random
+    // IK seeds before giving up. The arm has not moved, so this is motion-free.
+    for (int pass = 0; pass < 2; ++pass) {
+      if (pass > 0) {
+        RCLCPP_WARN(node_->get_logger(),
+          "TABLE APPROACH SEARCH RETRY: no candidate in pass 1, searching again (planning only)");
       }
-      if (!state.setFromIK(group, target, tcp_, 0.08, valid)) {
-        continue;
-      }
-      if (alternate && std::none_of(group->getVariableNames().begin(),
-          group->getVariableNames().end(), [&state, &scene](const std::string & joint) {
-          return std::abs(state.getVariablePosition(joint) -
-              scene.getCurrentState().getVariablePosition(joint)) >= 0.1;
-          }))
-      {
-        continue;
-      }
-      std::vector<moveit::core::RobotStatePtr> path;
-      if (!checkedFinePath(scene, state, descent, path)) {
-        continue;
-      }
-      std::vector<double> joints;
-      state.copyJointGroupPositions(group, joints);
-      if (!arm_->setJointValueTarget(joints)) {
-        continue;
-      }
-      arm_->setStartStateToCurrentState();
-      Group::Plan approach;
-      if (arm_->plan(approach) == moveit::core::MoveItErrorCode::SUCCESS) {
-        RCLCPP_INFO(node_->get_logger(), "TABLE DESCENT PROBE PASSED: candidate=%d points=%zu",
-          attempt + 1, path.size());
-        return approach;
+      for (int attempt = 0; attempt < 12; ++attempt) {
+        auto state = scene.getCurrentState();
+        if (attempt > 0 || pass > 0) {
+          state.setToRandomPositions(group);
+        }
+        if (!state.setFromIK(group, target, tcp_, 0.08, valid)) {
+          continue;
+        }
+        if (alternate && std::none_of(group->getVariableNames().begin(),
+            group->getVariableNames().end(), [&state, &scene](const std::string & joint) {
+            return std::abs(state.getVariablePosition(joint) -
+                scene.getCurrentState().getVariablePosition(joint)) >= 0.1;
+            }))
+        {
+          continue;
+        }
+        std::vector<moveit::core::RobotStatePtr> path;
+        if (!checkedFinePath(scene, state, descent, path)) {
+          continue;
+        }
+        std::vector<double> joints;
+        state.copyJointGroupPositions(group, joints);
+        if (!arm_->setJointValueTarget(joints)) {
+          continue;
+        }
+        // Replan the same (nearby) posture before moving to a random IK seed:
+        // a random posture can mean a long reconfiguration that rotates the held box.
+        Group::Plan approach;bool planned = false;
+        for (int replan = 0; replan < 5 && !planned; ++replan) {
+          setPlanningStartState();
+          planned = arm_->plan(approach) == moveit::core::MoveItErrorCode::SUCCESS &&
+            carryClearance(approach, relative, relative_angle, "TABLE APPROACH");
+          if (!planned) {
+            RCLCPP_WARN(node_->get_logger(),
+              "TABLE APPROACH REPLAN %d/5: candidate=%d plan rejected", replan + 1, attempt + 1);
+          }
+        }
+        if (planned) {
+          RCLCPP_INFO(node_->get_logger(),
+            "TABLE DESCENT PROBE PASSED: pass=%d candidate=%d points=%zu",
+            pass + 1, attempt + 1, path.size());
+          return approach;
+        }
       }
     }
     throw std::runtime_error("No table approach with a complete collision-checked descent");
@@ -369,22 +466,31 @@ private:
     goal.position.x = pre_tcp.x();goal.position.y = pre_tcp.y();goal.position.z = pre_tcp.z();
     RCLCPP_INFO(node_->get_logger(), "PLACE TOP-DOWN ALIGN AND APPROACH: box center z=0.500");
     arm_->setGoalPositionTolerance(0.00015);arm_->setGoalOrientationTolerance(0.0005);
-    arm_->setMaxVelocityScalingFactor(0.05);arm_->setMaxAccelerationScalingFactor(0.05);
+    arm_->setMaxVelocityScalingFactor(0.08);arm_->setMaxAccelerationScalingFactor(0.08);
     Pose descent = goal;
     descent.position.z += 0.422 - pre_center.z();
     arm_->setGoalJointTolerance(0.00005);
-    const auto approach = planTableApproach(goal, descent, alternate);
-    require(arm_->execute(approach) == moveit::core::MoveItErrorCode::SUCCESS,
-      "Table approach execution failed");
+    const auto approach = planTableApproach(goal, descent, alternate, relative, relative_angle);
+    executeMonitored(approach.trajectory, "TABLE APPROACH", reference, reference_angle);
     waitAt(&goal, 0.0003, 0.0015);
-    require(tilt(freshBox()) < 0.00873, "Box not parallel enough for descent");
+    {
+      // Let the held box stop swinging before judging its tilt (limit unchanged).
+      const double settled_tilt = tilt(stableBox());
+      RCLCPP_INFO(node_->get_logger(), "PREPLACE TILT: %.3f deg (limit 0.500)",
+        settled_tilt * 180 / M_PI);
+      char message[96];
+      std::snprintf(message, sizeof(message),
+        "Box not parallel enough for descent (tilt=%.3f deg)", settled_tilt * 180 / M_PI);
+      require(settled_tilt < 0.00873, message);
+    }
     double drift = 0, angle = 0;
-    holdTransferred("PREPLACE", reference, reference_angle, drift, angle);
+    holdTransferred("PREPLACE", reference, reference_angle, drift, angle, 1.0);
     auto current_box = freshBox();auto current_tcp = arm_->getCurrentPose(tcp_).pose;
     syncHeldBox(current_box, current_tcp);
     goal.position.x = current_tcp.position.x - current_box.position.x;
     goal.position.y = current_tcp.position.y + 0.05 - current_box.position.y;
     goal.position.z = current_tcp.position.z + 0.422 - current_box.position.z;
+    {std::lock_guard<std::mutex> lock(mutex_);seating_ = true;}  // tabletop contact allowed now
     RCLCPP_INFO(node_->get_logger(), "PLACE DESCENT: box center z=0.422, then contact steps");
     try {
       linear(goal, 0.02, true);
@@ -422,24 +528,48 @@ private:
       bottom(current_box) - 0.4 > -0.0003, "Box moved excessively while reducing overclosure");
     syncHeldBox(current_box, current_tcp);
     allowFingers(true);  // Only box-table support; robot-table collisions remain checked.
-    bool seated = false;
+    bool seated = false;int nudges = 0;
     for (int step = 0; step < 10; ++step) {
       current_box = freshBox();
-      require(tilt(current_box) < 0.00873, "Box tilted during seating");
+      if (tilt(current_box) >= 0.00873) {
+        // A single sample right after a contact step can catch the box mid-swing.
+        // Let it settle, then judge (limit unchanged).
+        RCLCPP_WARN(node_->get_logger(), "SEAT TILT TRANSIENT: %.3f deg, waiting for box to settle",
+          tilt(current_box) * 180 / M_PI);
+        current_box = stableBox();
+        char message[96];
+        std::snprintf(message, sizeof(message), "Box tilted during seating (tilt=%.3f deg)",
+          tilt(current_box) * 180 / M_PI);
+        require(tilt(current_box) < 0.00873, message);
+      }
       const double gap = bottom(current_box) - 0.4;
+      const bool contact = supported();
       RCLCPP_INFO(node_->get_logger(), "SEAT step=%d bottom_gap=%.3f mm contact=%d",
-        step, gap * 1000, supported());
+        step, gap * 1000, contact);
       require(gap > -0.0003, "Box penetration too large; refusing further descent");
-      if (supported() && std::abs(gap) < 0.001) {seated = true;break;}
-      if (gap <= 0.00015) {waitSupport();seated = true;break;}
+      // Seated only when in contact AND lightly pressed (passing runs: -0.002..-0.005 mm).
+      // A corner touch can report contact while the box still hangs slightly above the
+      // table (it then pivots in the fingers and contact disappears), so contact alone at a
+      // positive gap is not accepted.
+      if (contact && gap <= -0.000001) {seated = true;break;}
+      double step_down = std::min(0.0005, gap + 0.0001);
+      if (gap <= 0.00015) {
+        // The held box cannot fall onto the table by itself. Make a bounded final small
+        // descent (gap + 0.1 mm, at most 0.2 mm, at most 3 times) instead of only waiting.
+        if (nudges >= 3 || gap < -0.00005) {waitSupport(true);seated = true;break;}
+        ++nudges;step_down = std::min(0.0002, gap + 0.0001);
+        RCLCPP_INFO(node_->get_logger(),
+          "SEAT FINAL NUDGE %d/3: bottom_gap=%.3f mm contact=%d, descending %.3f mm",
+          nudges, gap * 1000, contact, step_down * 1000);
+      }
       goal = arm_->getCurrentPose(tcp_).pose;
       goal.orientation.w = aligned.w();goal.orientation.x = aligned.x();
       goal.orientation.y = aligned.y();goal.orientation.z = aligned.z();
-      goal.position.z -= std::min(0.0005, gap + 0.0001);
+      goal.position.z -= step_down;
       linear(goal, 0.01);waitAt(&goal, 0.00015, 0.0015);
     }
     require(seated, "Could not establish table support within bounded seating steps");
-    waitSupport();
+    waitSupport(true);  // pre-open only: re-press allowed while the gripper is closed
     const auto release_reference = freshBox();
     RCLCPP_INFO(node_->get_logger(), "OPEN ON TABLE: physical support verified, two-step opening");
     gripper(0.021, false);  // Remove squeeze gently before the full opening.
@@ -455,6 +585,7 @@ private:
       std::this_thread::sleep_for(100ms);
     }
     require(scene_->getAttachedObjects({"target_box"}).empty(), "Planning detach failed");
+    {std::lock_guard<std::mutex> lock(mutex_);carrying_ = false;}
     const auto open_box = stableBox();
     release_slip = std::max(release_slip, (point(open_box) - point(release_reference)).norm());
     RCLCPP_INFO(node_->get_logger(), "BEFORE RETREAT: release_slip=%.3f mm box=(%.5f, %.5f, %.5f)",
@@ -462,7 +593,7 @@ private:
     addBox(open_box);
     goal = arm_->getCurrentPose(tcp_).pose;goal.position.y -= 0.12;
     RCLCPP_INFO(node_->get_logger(), "PLACE RETREAT: 120 mm horizontally, no ready return");
-    linear(goal, 0.03);waitAt(&goal);
+    linear(goal, 0.10);waitAt(&goal);  // gripper open, box released
     const auto start = node_->now();const auto wall = Wall::now();
     double max_slip = release_slip;
     while ((node_->now() - start).seconds() < 3.0) {
@@ -490,11 +621,13 @@ private:
 
   void holdTransferred(
     const char * label, const Eigen::Vector3d & reference,
-    const Eigen::Quaterniond & reference_angle, double & max_drift, double & max_angle)
+    const Eigen::Quaterniond & reference_angle, double & max_drift, double & max_angle,
+    double seconds = 3.0)
   {
     const auto sim_start = node_->now();const auto wall_start = Wall::now();
-    while ((node_->now() - sim_start).seconds() < 3.0) {
+    while ((node_->now() - sim_start).seconds() < seconds) {
       require(Wall::now() - wall_start < 30s, "Transfer hold simulation clock timed out");
+      carrySafe();
       const auto box = freshBox();const auto tcp = arm_->getCurrentPose(tcp_).pose;
       max_drift = std::max(max_drift, (rotation(tcp).inverse() *
           (point(box) - point(tcp)) - reference).norm());
@@ -512,9 +645,22 @@ private:
 
   Pose freshBox()
   {
-    std::lock_guard<std::mutex> lock(mutex_);
-    require(sequence_ > 0 && Wall::now() - box_received_ < 2s, "Physical box pose stale/missing");
-    return box_;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (sequence_ > 0 && Wall::now() - box_received_ < 2s) {return box_;}
+    }
+    // Transient bridge gap: wait up to 3 s more for a NEW pose; never use the stale one.
+    RCLCPP_WARN(node_->get_logger(), "BOX POSE STALE: waiting up to 3 s for a fresh Gazebo pose");
+    const auto end = Wall::now() + 3s;
+    while (Wall::now() < end) {
+      std::this_thread::sleep_for(50ms);
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (sequence_ > 0 && Wall::now() - box_received_ < 200ms) {
+        RCLCPP_WARN(node_->get_logger(), "BOX POSE RECOVERED");
+        return box_;
+      }
+    }
+    throw std::runtime_error("Physical box pose stale/missing");
   }
   Pose stableBox()
   {
@@ -542,7 +688,8 @@ private:
     auto previous = arm_->getCurrentJointValues();int calm = 0;
     const auto end = Wall::now() + 20s;
     while (Wall::now() < end) {
-      std::this_thread::sleep_for(200ms);
+      // 100 ms samples with 0.0001 rad: same 1 mrad/s settle criterion as before.
+      std::this_thread::sleep_for(100ms);
       auto state = arm_->getCurrentState(2.0);
       require(static_cast<bool>(state), "Fresh arm state missing");
       std::vector<double> current;state->copyJointGroupPositions("arm_1", current);
@@ -556,7 +703,7 @@ private:
           Eigen::Quaterniond(actual.rotation()).angularDistance(rotation(*target)) <
           angle_tolerance;
       }
-      calm = delta < 0.0002 && near ? calm + 1 : 0;previous = current;
+      calm = delta < 0.0001 && near ? calm + 1 : 0;previous = current;
       if (calm >= 3) {return;}
     }
     const auto actual = arm_->getCurrentPose(tcp_).pose;
@@ -574,14 +721,149 @@ private:
     }
     throw std::runtime_error("Arm not settled at target; refusing next motion");
   }
-  void executePlan()
+  // The test narrows joint5 planning bounds to +/-2.60 rad (physical stop 2.876 rad). A plan that
+  // ends on that artificial bound can settle a few microradians outside it, and MoveIt then
+  // rejects every next plan. Clamp only such tiny excursions (<= 0.005 rad, below the default
+  // 0.01 rad execution start tolerance); larger violations are left for MoveIt to reject.
+  void setPlanningStartState()
+  {
+    auto current = arm_->getCurrentState(2.0);
+    require(static_cast<bool>(current), "No planning start state");
+    moveit::core::RobotState start(*current);
+    for (const auto * joint : start.getJointModelGroup("arm_1")->getActiveJointModels()) {
+      const auto & name = joint->getName();
+      const auto & bounds = joint->getVariableBounds(name);
+      const double value = start.getVariablePosition(name);
+      const double excess = std::max(bounds.min_position_ - value, value - bounds.max_position_);
+      if (excess > 0 && excess <= 0.005) {
+        start.setVariablePosition(name,
+          std::clamp(value, bounds.min_position_, bounds.max_position_));
+        RCLCPP_WARN(node_->get_logger(),
+          "START STATE CLAMP: %s actual=%.6f excess=%.6f rad (planning bound only)",
+          name.c_str(), value, excess);
+      }
+    }
+    start.update();
+    arm_->setStartState(start);
+  }
+  // MoveIt only guarantees zero-distance clearance for the held box. Before executing a
+  // carry plan, require (a) >= 30 mm above the tabletop while over the margin-expanded
+  // table footprint and (b) >= 15 mm from every shelf_1 post and board (box half-diagonal
+  // 28.3 mm, box half-height along world z from its current orientation).
+  bool carryClearance(
+    const Group::Plan & plan, const Eigen::Vector3d & reference,
+    const Eigen::Quaterniond & reference_angle, const char * label)
+  {
+    moveit::core::RobotState state(arm_->getRobotModel());
+    state.setToDefaultValues();
+    const auto & trajectory = plan.trajectory.joint_trajectory;
+    double min_bottom = std::numeric_limits<double>::infinity();
+    double min_post = std::numeric_limits<double>::infinity();
+    double min_board = std::numeric_limits<double>::infinity();
+    // shelf_1 boards (0.5 x 0.38 x 0.025 m) at these centre heights, shelf at (0, -1.2).
+    const std::array<double, 4> boards = {0.08, 0.45, 0.80, 1.15};
+    const std::array<Eigen::Vector2d, 4> posts = {
+      Eigen::Vector2d(0.25, -1.02), Eigen::Vector2d(0.25, -1.38),
+      Eigen::Vector2d(-0.25, -1.02), Eigen::Vector2d(-0.25, -1.38)};
+    for (const auto & waypoint : trajectory.points) {
+      state.setVariablePositions(trajectory.joint_names, waypoint.positions);
+      state.update();
+      const auto & tcp = state.getGlobalLinkTransform(tcp_);
+      const Eigen::Vector3d center = tcp * reference;
+      const Eigen::Matrix3d box = tcp.linear() * reference_angle.toRotationMatrix();
+      const double half_height = 0.02 * box.row(2).cwiseAbs().sum();
+      if (std::abs(center.x()) <= 0.43 && std::abs(center.y()) <= 0.33) {
+        min_bottom = std::min(min_bottom, center.z() - half_height);
+      }
+      if (std::abs(center.x()) <= 0.25 + 0.0283 + 0.015 &&
+        std::abs(center.y() + 1.2) <= 0.19 + 0.0283 + 0.015)
+      {
+        for (const double board : boards) {
+          const double below = (board - 0.0125) - (center.z() + half_height);
+          const double above = (center.z() - half_height) - (board + 0.0125);
+          min_board = std::min(min_board, std::max(below, above));
+        }
+      }
+      for (const auto & post : posts) {
+        const double dx = std::max(std::abs(center.x() - post.x()) - 0.02, 0.0);
+        const double dy = std::max(std::abs(center.y() - post.y()) - 0.02, 0.0);
+        min_post = std::min(min_post, std::hypot(dx, dy) - 0.0283);
+      }
+    }
+    const bool ok = min_bottom >= 0.43 && min_post >= 0.015 && min_board >= 0.015;
+    RCLCPP_INFO(node_->get_logger(),
+      "%s CLEARANCE %s: min box bottom over table=%.4f m (limit 0.430) "
+      "min shelf_1 post gap=%.1f mm, board gap=%.1f mm (limits 15)", label,
+      ok ? "OK" : "REJECTED", min_bottom, min_post * 1000,
+      std::isfinite(min_board) ? min_board * 1000 : 9999.0);
+    return ok;
+  }
+  void carrySafe()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    require(!carry_contact_, "Unexpected box contact while carrying; motion refused");
+    require(!unexpected_box_contact_, "Box contacted a robot link outside the fingers");
+  }
+  // Execute while sampling the held box every 100 ms (mirrors the right arm's
+  // SHELF TRANSFER MONITOR). Stops the arm on unexpected contact, lost finger
+  // contact, the box dropping near the tabletop, or a gross in-hand slip.
+  void executeMonitored(
+    const moveit_msgs::msg::RobotTrajectory & trajectory, const char * label,
+    const Eigen::Vector3d & reference, const Eigen::Quaterniond & reference_angle)
+  {
+    carrySafe();
+    auto execution = std::async(std::launch::async,
+        [this, &trajectory]() {return arm_->execute(trajectory);});
+    double min_bottom = std::numeric_limits<double>::infinity();
+    double max_drift = 0.0, max_angle = 0.0;int gross = 0;
+    try {
+      while (execution.wait_for(100ms) == std::future_status::timeout) {
+        carrySafe();
+        const auto box = freshBox();const auto tcp = arm_->getCurrentPose(tcp_).pose;
+        const auto inverse = rotation(tcp).inverse();
+        const double drift = (inverse * (point(box) - point(tcp)) - reference).norm();
+        const double angle = reference_angle.angularDistance(inverse * rotation(box));
+        max_drift = std::max(max_drift, drift);max_angle = std::max(max_angle, angle);
+        if (std::abs(box.position.x) <= 0.43 && std::abs(box.position.y) <= 0.33) {
+          min_bottom = std::min(min_bottom, bottom(box));
+          require(bottom(box) > 0.41, "Held box came within 10 mm of the tabletop in motion");
+        }
+        gross = (drift > 0.015 || angle > 0.1745) ? gross + 1 : 0;
+        require(gross < 2, std::string(label) + ": box slipped in gripper during motion");
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (contacts_seen_) {
+          for (const auto received : finger_contact_) {
+            require(Wall::now() - received < 1s, "Finger contact lost during carry");
+          }
+        }
+      }
+    } catch (const std::exception & error) {
+      RCLCPP_ERROR(node_->get_logger(), "%s STOP REQUESTED: %s", label, error.what());
+      arm_->stop();execution.wait();throw;
+    }
+    require(execution.get() == moveit::core::MoveItErrorCode::SUCCESS,
+      std::string(label) + " execution failed");
+    carrySafe();
+    RCLCPP_INFO(node_->get_logger(),
+      "%s MONITOR PASSED: min_box_bottom_over_table=%.4f m max_sampled_drift=%.3f mm "
+      "max_sampled_angle=%.3f deg", label, min_bottom, max_drift * 1000, max_angle * 180 / M_PI);
+  }
+  void executePlan(const std::function<bool(const Group::Plan &)> & accept = nullptr,
+    const std::function<void(const Group::Plan &)> & run = nullptr)
   {
     Group::Plan plan;bool planned = false;
-    for (int attempt = 0; attempt < 3; ++attempt) {
-      arm_->setStartStateToCurrentState();
-      if (arm_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS) {planned = true;break;}
+    // OMPL paths are sometimes rejected by ValidateSolution after dense time
+    // parameterization (arm link touching the table). Each attempt takes ~0.1 s,
+    // so allow more fresh attempts; collision validation itself is unchanged.
+    for (int attempt = 0; attempt < 10; ++attempt) {
+      setPlanningStartState();
+      if (arm_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS &&
+        (!accept || accept(plan))) {planned = true;break;}
+      RCLCPP_WARN(node_->get_logger(), "PLAN ATTEMPT %d/10 rejected; replanning", attempt + 1);
     }
     require(planned, "Planning failed");
+    if (run) {run(plan);return;}
+    carrySafe();
     require(arm_->execute(plan) == moveit::core::MoveItErrorCode::SUCCESS, "Execution failed");
   }
   moveit_msgs::msg::PlanningScene planningSceneSnapshot()
@@ -658,6 +940,30 @@ private:
     }
   }
 
+  // TOTG occasionally fails numerically ("Negative path velocity") on dense fine
+  // paths. Retry the same geometric path with slightly different TOTG parameters;
+  // the endpoint/precision checks after timing still apply unchanged.
+  bool timeWithRetry(robot_trajectory::RobotTrajectory & trajectory, double scale, bool fine)
+  {
+    const robot_trajectory::RobotTrajectory original(trajectory, true);
+    const double tolerance = fine ? 0.00001 : 0.001, dt = fine ? 0.005 : 0.01,
+      angle = fine ? 0.000001 : 0.0001;
+    const std::array<std::array<double, 3>, 3> variants{{
+      {tolerance, dt, angle}, {2 * tolerance, dt, 10 * angle}, {0.5 * tolerance, 0.5 * dt, angle}}};
+    for (size_t i = 0; i < variants.size(); ++i) {
+      if (i > 0) {
+        trajectory = robot_trajectory::RobotTrajectory(original, true);
+        RCLCPP_WARN(node_->get_logger(), "TIMING RETRY %zu/%zu: TOTG failed, retrying with "
+          "tolerance=%.6f dt=%.4f", i, variants.size() - 1, variants[i][0], variants[i][1]);
+      }
+      trajectory_processing::TimeOptimalTrajectoryGeneration timing(
+        variants[i][0], variants[i][1], variants[i][2]);
+      if (timing.computeTimeStamps(trajectory, scale, scale)) {return true;}
+    }
+    trajectory = robot_trajectory::RobotTrajectory(original, true);
+    return false;
+  }
+
   void linear(const Pose & target, double scale = 0.1, bool precise = false)
   {
     arm_->setStartStateToCurrentState();moveit_msgs::msg::RobotTrajectory msg;
@@ -681,9 +987,7 @@ private:
       RCLCPP_INFO(node_->get_logger(), "RAW FINE ENDPOINT: error=%.4f mm",
         1000 * (raw.translation() - point(target)).norm());
     }
-    trajectory_processing::TimeOptimalTrajectoryGeneration timing(
-      fine ? 0.00001 : 0.001, fine ? 0.005 : 0.01, fine ? 0.000001 : 0.0001);
-    require(timing.computeTimeStamps(trajectory, scale, scale), "Trajectory timing failed");
+    require(timeWithRetry(trajectory, scale, fine), "Trajectory timing failed");
     const auto endpoint = trajectory.getLastWayPoint().getGlobalLinkTransform(tcp_);
     const double error = (endpoint.translation() - point(target)).norm();
     const double angle = Eigen::Quaterniond(endpoint.rotation()).angularDistance(rotation(target));
@@ -696,6 +1000,7 @@ private:
         trajectory.getLastWayPoint().getVariablePosition(name));
     }
     trajectory.getRobotTrajectoryMsg(msg);
+    carrySafe();
     require(arm_->execute(msg) == moveit::core::MoveItErrorCode::SUCCESS,
         "Cartesian execution failed");
   }
@@ -774,6 +1079,8 @@ private:
   bool robot_table_contact_ = false, table_support_seen_ = false;
   Wall::time_point table_support_wall_;
   bool contacts_seen_ = false, support_seen_ = false, unexpected_box_contact_ = false;
+  bool carrying_ = false, seating_ = false, carry_contact_ = false;
+  std::array<Wall::time_point, 2> finger_contact_{};
   Wall::time_point support_wall_;
   int64_t support_sim_ = 0;
   rclcpp::Node::SharedPtr node_;
