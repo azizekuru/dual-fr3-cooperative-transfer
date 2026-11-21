@@ -28,7 +28,7 @@ tohumlarla bir kez tekrarlanır (TABLE APPROACH SEARCH RETRY). Bir adayın MoveI
 reddedilirse rastgele duruşa geçmeden önce aynı aday en çok 5 kez yeniden planlanır
 (TABLE APPROACH REPLAN); uzak duruşa geçiş, tutulan kutuyu döndürebilen uzun bir hareket demektir.
 Gazebo kutu pozu 2 s gelmezse en çok 3 s daha yeni poz beklenir (BOX POSE STALE/RECOVERED);
-eski poz hiçbir zaman kullanılmaz. Seçilen yaklaşım hız/ivme ölçeği 0.08 ile yürütülür.
+eski poz hiçbir zaman kullanılmaz. Seçilen yaklaşım hız/ivme ölçeği 0.05 ile yürütülür.
 TCP yakınlığı 0.3 mm ve 0.0015 rad koşullarıyla beklenir. Kutu eğimi, elde sallanma durulduktan sonra
 ölçülür ve 0.5 derecenin altında olmalıdır (PREPLACE TILT). Ön yerleştirme pozunda kutu–el dönüşümü 1 simülasyon saniyesi
 izlenir (PREPLACE); kayma ve açı sınırları değişmez. Gerçek iniş ölçülen kutu ve eklem durumundan tekrar hesaplanır,

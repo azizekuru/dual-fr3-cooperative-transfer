@@ -466,7 +466,7 @@ private:
     goal.position.x = pre_tcp.x();goal.position.y = pre_tcp.y();goal.position.z = pre_tcp.z();
     RCLCPP_INFO(node_->get_logger(), "PLACE TOP-DOWN ALIGN AND APPROACH: box center z=0.500");
     arm_->setGoalPositionTolerance(0.00015);arm_->setGoalOrientationTolerance(0.0005);
-    arm_->setMaxVelocityScalingFactor(0.08);arm_->setMaxAccelerationScalingFactor(0.08);
+    arm_->setMaxVelocityScalingFactor(0.05);arm_->setMaxAccelerationScalingFactor(0.05);
     Pose descent = goal;
     descent.position.z += 0.422 - pre_center.z();
     arm_->setGoalJointTolerance(0.00005);

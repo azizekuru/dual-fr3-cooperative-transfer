@@ -478,17 +478,22 @@ private:
           "searching again (planning only)");
       }
       const auto deadline = Wall::now() + 35s;
-      for (size_t variant = 0; variant < nominal.size(); ++variant) {
-        const Eigen::Quaterniond q = nearestCubeRotation(nominal[variant] * relative_angle) *
-          relative_angle.inverse();
-        Eigen::Isometry3d end = Eigen::Isometry3d::Identity();
-        end.linear() = q.toRotationMatrix();
-        end.translation() = Eigen::Vector3d(0, rack_y_ - 0.16, 0.4827) - q * relative;
-        Eigen::Isometry3d above = end;
-        above.translation().z() += 0.0798;
-        Eigen::Isometry3d front = above;
-        front.translation().y() -= 0.12;
-        for (int attempt = 0; attempt < 16 && Wall::now() < deadline; ++attempt) {
+      // Visit every hand orientation before spending another seed on the first one.
+      // All variants share the existing per-pass time budget and safety checks.
+      for (int attempt = 0; attempt < 16 && Wall::now() < deadline; ++attempt) {
+        for (size_t variant = 0; variant < nominal.size() && Wall::now() < deadline; ++variant) {
+          RCLCPP_INFO(node_->get_logger(),
+            "SHELF SEARCH CANDIDATE: pass=%d seed=%d variant=%zu",
+            pass + 1, attempt + 1, variant);
+          const Eigen::Quaterniond q = nearestCubeRotation(nominal[variant] * relative_angle) *
+            relative_angle.inverse();
+          Eigen::Isometry3d end = Eigen::Isometry3d::Identity();
+          end.linear() = q.toRotationMatrix();
+          end.translation() = Eigen::Vector3d(0, rack_y_ - 0.16, 0.4827) - q * relative;
+          Eigen::Isometry3d above = end;
+          above.translation().z() += 0.0798;
+          Eigen::Isometry3d front = above;
+          front.translation().y() -= 0.12;
           auto state = scene->getCurrentState();
           if (attempt > 0 || pass > 0) {state.setToRandomPositions(group);}
           if (!state.setFromIK(group, end, tcp_, 0.08, valid)) {continue;}

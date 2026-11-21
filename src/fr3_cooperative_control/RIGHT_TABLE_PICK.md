@@ -272,3 +272,30 @@ Sağ kol masadan kavrama adayı için MoveIt planı reddedilirse rastgele duruş
 en çok 5 kez yeniden planlanır (RIGHT PICK REPLAN n/5).
 
 Kartezyen yolların zaman parametrelemesi (TOTG) sayısal olarak başarısız olursa ("Negative path velocity") aynı geometrik yol biraz farklı TOTG parametreleriyle en çok iki kez daha zamanlanır (TIMING RETRY n/2); uç nokta hassasiyet kontrolleri değişmez.
+
+## Son yerel doğrulama: y=1.25 m
+
+Sol kolun masa yerleştirme yaklaşımı hız/ivme ölçeği 0.08 yerine 0.05 olarak ayarlandı.
+Sağ kolun raf yaklaşımı aramasında, bir el yönünün bütün tohumlarını tüketmek yerine
+üç el yönü her tohum turunda sırayla denenir. Tur başına 35 saniye bütçe, iki arama turu
+ve mevcut çarpışma, eklem payı ve kutu açıklığı kontrolleri korunur.
+SHELF SEARCH CANDIDATE satırı tur, tohum ve el yönünü raporlar.
+
+Bu iki değişikliği içeren sürümde kullanıcı tarafından yapılan 12 tam aktarımın
+12'si FULL TRANSFER TEST PASSED ile tamamlandı. Raf merkezi y=1.25 m,
+kutu hedefi y=1.09 m; komut:
+
+```bash
+ros2 launch fr3_cooperative_control table_handoff_test.launch.py right_stage:=shelf_place
+```
+
+Başlatmadan başarı mesajına kadar ölçülen gerçek süreler (saniye):
+278, 264, 264, 254, 257, 268, 269, 238, 234, 228, 234, 265.
+Ortalama 254.4 s; aralık 228–278 s. Başlatma süresi dahildir, kapatma süresi dahil değildir.
+Son raf XY hatası 0.051–2.100 mm, bırakma kayması 0.046–0.218 mm,
+raporlanan son eğim bütün denemelerde 0.000 derecedir.
+Sol yaklaşımda örneklenen en büyük göreli kayma 5.465 mm, iniş öncesi en büyük eğim
+0.017 derecedir. Sol ana taşıma hareketinde 13.615 mm'ye ulaşan anlık göreli kayma
+ayrı bir iyileştirme konusudur; bu sürüm kaymasız taşıma garantisi vermez.
+Bu sonuçlar yalnızca test edilen sahne ve koşullar içindir. İki değişikliğin ayrı ayrı
+başarıya etkisi kontrollü bir karşılaştırmayla ölçülmemiştir.
