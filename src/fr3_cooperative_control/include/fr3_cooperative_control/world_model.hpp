@@ -53,6 +53,8 @@ struct TaskConfig
   int source_level = 2;
   std::string target_shelf = "shelf_2";
   int target_level = 2;
+  double source_dx = 0.0;    // box x offset from the board centre (slot), source cell
+  double target_dx = 0.0;    // same for the target cell
   double handoff_x = 0.0;    // box centre on the table, world frame
   double handoff_y = 0.05;
   double cell_inset = 0.03;  // box centre behind the board's front edge
@@ -81,8 +83,15 @@ public:
   // Cell `dx` metres sideways from the board centre and `inset` metres behind the front edge.
   Cell shelfCell(const std::string & shelf, int level, double dx, double inset) const;
   Cell tableCell(double x, double y) const;
-  Cell sourceCell() const {return shelfCell(task_.source_shelf, task_.source_level);}
-  Cell targetCell() const {return shelfCell(task_.target_shelf, task_.target_level);}
+  Cell sourceCell() const
+  {
+    return shelfCell(task_.source_shelf, task_.source_level, task_.source_dx, task_.cell_inset);
+  }
+  Cell targetCell() const
+  {
+    return shelfCell(task_.target_shelf, task_.target_level, task_.target_dx, task_.cell_inset);
+  }
+  const Shelf & sourceShelf() const {return shelf(task_.source_shelf);}
   Cell handoffCell() const;
   const Shelf & targetShelf() const {return shelf(task_.target_shelf);}
 

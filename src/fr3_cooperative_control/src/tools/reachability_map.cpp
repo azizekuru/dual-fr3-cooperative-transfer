@@ -42,15 +42,7 @@ struct Grasp
   std::vector<Eigen::Vector3d> pre{Eigen::Vector3d(0, 0, 0.08)};
 };
 
-// Hand frame: z = approach, y = finger opening axis, x = y cross z.
-Eigen::Quaterniond handFrame(const Eigen::Vector3d & approach, const Eigen::Vector3d & fingers)
-{
-  Eigen::Matrix3d r;
-  r.col(2) = approach.normalized();
-  r.col(1) = fingers.normalized();
-  r.col(0) = r.col(1).cross(r.col(2));
-  return Eigen::Quaterniond(r);
-}
+using fc::handFrame;  // hand z = approach, hand y = finger opening axis
 
 struct Cell
 {

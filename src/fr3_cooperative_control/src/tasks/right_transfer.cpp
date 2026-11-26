@@ -235,25 +235,26 @@ private:
   }
   // Inside the shelf at the approach height, above the resting centre.
   Eigen::Vector3d insertCenter() const {return cell_.center + Eigen::Vector3d(0, 0, 0.08);}
+  // Lowest allowed bottom of the carried box during the shelf transfer: 8 cm above the tabletop
+  // over the table, 17.5 mm above the target board near the target shelf, and the lower of the
+  // two in between. (Level 2: 0.48 m everywhere, the former single floor.)
+  double boxFloor(const Eigen::Vector3d & center) const
+  {
+    const double table_floor = world_->table().top() + 0.08;
+    const double board_floor = cell_.surface + 0.0175;
+    if (world_->overTable(center, 0.03)) {return table_floor;}
+    const auto & shelf = world_->targetShelf();
+    const auto & board = shelf.board(task_.target_level);
+    const bool near_shelf = inward_ * center.y() >= inward_ * shelf.frontY() - 0.10 &&
+      std::abs(center.x() - board.center.x()) <= 0.5 * board.size.x() + 0.10;
+    return near_shelf ? board_floor : std::min(table_floor, board_floor);
+  }
   // y limit along the shelf direction, `back` metres in front of the cell centre.
   double limitBefore(double back) const {return cell_.center.y() - inward_ * back;}
 
   Eigen::Quaterniond nearestCubeRotation(const Eigen::Quaterniond & current)
   {
-    std::array<int, 3> order = {0, 1, 2};double best_error = 10;
-    Eigen::Quaterniond best = current;
-    do {
-      for (int signs = 0; signs < 8; ++signs) {
-        Eigen::Matrix3d matrix = Eigen::Matrix3d::Zero();
-        for (int column = 0; column < 3; ++column) {
-          matrix(order[column], column) = signs & (1 << column) ? -1.0 : 1.0;
-        }
-        if (matrix.col(0).cross(matrix.col(1)).dot(matrix.col(2)) < 0.5) {continue;}
-        Eigen::Quaterniond q(matrix);const double error = q.angularDistance(current);
-        if (error < best_error) {best_error = error;best = q;}
-      }
-    } while (std::next_permutation(order.begin(), order.end()));
-    return best;
+    return fc::nearestCubeRotation(current);
   }
   struct ShelfTransfer
   {
@@ -345,6 +346,7 @@ private:
     double min_margin = std::numeric_limits<double>::infinity();
     double max_reach = -std::numeric_limits<double>::infinity();  // along inward_
     double min_bottom = std::numeric_limits<double>::infinity();
+    double min_slack = std::numeric_limits<double>::infinity();  // box bottom above its floor
     for (const auto & waypoint : trajectory.points) {
       state.setVariablePositions(trajectory.joint_names, waypoint.positions);
       state.update();
@@ -353,18 +355,18 @@ private:
       const Eigen::Vector3d center = tcp_pose * relative;
       const Eigen::Matrix3d rotation = tcp_pose.linear() * relative_angle.toRotationMatrix();
       max_reach = std::max(max_reach, inward_ * center.y());
-      min_bottom = std::min(min_bottom,
-        center.z() - box_.half() * rotation.row(2).cwiseAbs().sum());
+      const double box_bottom = center.z() - box_.half() * rotation.row(2).cwiseAbs().sum();
+      min_bottom = std::min(min_bottom, box_bottom);
+      min_slack = std::min(min_slack, box_bottom - boxFloor(center));
       if (!state.satisfiesBounds(group) || scene.isStateColliding(state, names_.group)) {
         return false;
       }
     }
-    const double floor = cell_.surface + 0.0175;  // carried box stays above the target board
-    const bool accepted = min_margin >= 0.05 && max_reach <= inward_ * y_limit &&
-      min_bottom >= floor;
+    const bool accepted = min_margin >= 0.05 && max_reach <= inward_ * y_limit && min_slack >= 0;
     RCLCPP_INFO(node_->get_logger(),
-      "SHELF TRANSFER %s: phase=%s joint margin=%.4f rad max_box_y=%.4f m min_box_bottom=%.4f m",
-      accepted ? "PLAN" : "REJECTED", phase, min_margin, inward_ * max_reach, min_bottom);
+      "SHELF TRANSFER %s: phase=%s joint margin=%.4f rad max_box_y=%.4f m min_box_bottom=%.4f m "
+      "floor slack=%.4f m", accepted ? "PLAN" : "REJECTED", phase, min_margin,
+      inward_ * max_reach, min_bottom, min_slack);
     return accepted;
   }
 
@@ -620,7 +622,7 @@ private:
     const moveit_msgs::msg::RobotTrajectory & plan, const Eigen::Vector3d & relative,
     const Eigen::Quaterniond & relative_angle)
   {
-    const double floor = cell_.surface - 0.0175;  // 35 mm below the planned 0.0175 m floor
+    constexpr double kMonitorTolerance = 0.035;  // measured box may sag 35 mm below its floor
     safe();
     auto execution = std::async(std::launch::async, [this, &plan]() {return arm().execute(plan);});
     double min_bottom = std::numeric_limits<double>::infinity();
@@ -636,7 +638,8 @@ private:
         const double angle = relative_angle.angularDistance(hand_inverse * rotation(box));
         min_bottom = std::min(min_bottom, box_.bottom(box));
         max_drift = std::max(max_drift, drift);
-        require(min_bottom > floor, "Box descended below physical transfer clearance");
+        require(box_.bottom(box) > boxFloor(point(box)) - kMonitorTolerance,
+          "Box descended below physical transfer clearance");
         consecutive_drift = (drift > 0.008 || angle > 0.1222) ? consecutive_drift + 1 : 0;
         require(consecutive_drift < 2, "Right grasp moved during shelf transfer");
         require(welded() || contacts_.fingersFresh(1s),

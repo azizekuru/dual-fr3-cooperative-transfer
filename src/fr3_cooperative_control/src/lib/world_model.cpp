@@ -55,6 +55,8 @@ TaskConfig TaskConfig::fromParameters(const rclcpp::Node & node)
   node.get_parameter_or("source_level", c.source_level, c.source_level);
   node.get_parameter_or("target_shelf", c.target_shelf, c.target_shelf);
   node.get_parameter_or("target_level", c.target_level, c.target_level);
+  node.get_parameter_or("source_dx", c.source_dx, c.source_dx);
+  node.get_parameter_or("target_dx", c.target_dx, c.target_dx);
   node.get_parameter_or("handoff_x", c.handoff_x, c.handoff_x);
   node.get_parameter_or("handoff_y", c.handoff_y, c.handoff_y);
   node.get_parameter_or("cell_inset", c.cell_inset, c.cell_inset);

@@ -115,6 +115,7 @@ Ek launch argümanları (varsayılanlar bugünkü davranışı verir):
 
 | Argüman | Varsayılan | Anlamı |
 |---|---|---|
+| `source_slot`, `target_slot` | `center` | Kutunun raftaki yeri (`left` / `center` / `right`, masadan rafa bakınca). Sol/sağ: kat merkezinden ±0.10 m |
 | `single_process` | `false` | `true`: iki kol görevi tek `transfer_task` sürecinde çalışır |
 | `speed_scale` | `1.0` | Test modu: tüm hareket hızlarını çarpar (en fazla 1.0'a kadar) |
 | `rigid_grasp` | `false` | Test modu: kavramada kutu ele kaynaklanır, bırakmadan önce çözülür (Gazebo DetachableJoint) |
@@ -125,6 +126,10 @@ Hızlı yol testi örneği:
 ros2 launch fr3_cooperative_control table_handoff_test.launch.py right_stage:=shelf_place \
   single_process:=true rigid_grasp:=true speed_scale:=3.0
 ```
+
+Sol kol kavramayı hareketten önce prova ederek seçer (`PICK GRASP SELECTED`): düz yandan, 20° veya
+35° aşağı eğik kavrama ve 12 veya 8 cm geri çekilme. Seçim, ulaşılabilirlik haritasının
+(`reachability_map.launch.py`) sonuçlarına dayanır: her rafta L1–L3, sol/sağ yuvalar, ön kenarın 3 cm içi.
 
 Not: `source_level`/`target_level` şimdilik yalnızca 2. kat için doğrulanmıştır. Diğer katlar için
 kavrama ve yaklaşma adaylarının seçimi (geçiş planı 4–6. adımlar) henüz yapılmadı.

@@ -23,6 +23,13 @@ SPAWN_DROP = 0.001      # spawn the box 1 mm above its support
 CELL_INSET = 0.03       # box centre behind the board's front edge
 HANDOFF_XY = (0.0, 0.05)
 LEVELS = ['1', '2', '3', '4']
+SLOTS = ['left', 'center', 'right']
+SLOT_OFFSET = 0.10      # left/right slot: box x offset from the board centre (reachability map)
+
+
+def slot_dx(slot, inward):
+    """x offset of a slot as seen from the table, facing the shelf (right = inward * +x)."""
+    return {'left': -1.0, 'center': 0.0, 'right': 1.0}[slot] * inward * SLOT_OFFSET
 
 
 def _xyz(element):
@@ -49,7 +56,13 @@ def _link_boxes(robot, link_name):
     return boxes
 
 
-def shelf_cell(robot, shelf, level):
+def shelf_inward(robot, shelf):
+    """+1 if the shelf lies at +y from the robots, else -1."""
+    joint = robot.find(f"./joint[@name='{shelf}_joint']/origin")
+    return 1.0 if _xyz(joint)[1] >= 0 else -1.0
+
+
+def shelf_cell(robot, shelf, level, dx=0.0):
     """Resting box centre in a shelf cell (MoveIt world frame); boards ordered bottom-up."""
     boards = sorted((b for b in _link_boxes(robot, f'{shelf}_link')
                      if b[1][2] < 0.05 and b[1][0] > 0.2 and b[1][1] > 0.2),
@@ -59,7 +72,7 @@ def shelf_cell(robot, shelf, level):
     center, size = boards[int(level) - 1]
     inward = 1.0 if center[1] >= 0 else -1.0
     front = center[1] - inward * size[1] / 2
-    return (center[0], front + inward * CELL_INSET, center[2] + size[2] / 2 + BOX_SIZE / 2)
+    return (center[0] + dx, front + inward * CELL_INSET, center[2] + size[2] / 2 + BOX_SIZE / 2)
 
 
 def handoff_cell(robot):
@@ -81,6 +94,10 @@ def generate_launch_description():
                               description='shelf_1 board the box starts on (1 = lowest)'),
         DeclareLaunchArgument('target_level', default_value='2', choices=LEVELS,
                               description='shelf_2 board the box is placed on (1 = lowest)'),
+        DeclareLaunchArgument('source_slot', default_value='center', choices=SLOTS,
+                              description='shelf_1 slot of the box, seen from the table'),
+        DeclareLaunchArgument('target_slot', default_value='center', choices=SLOTS,
+                              description='shelf_2 slot for the box, seen from the table'),
         DeclareLaunchArgument('single_process', default_value='false', choices=['true', 'false'],
                               description='Run both arm tasks in one transfer_task process'),
         DeclareLaunchArgument('speed_scale', default_value='1.0',
@@ -100,8 +117,13 @@ def setup(context):
     left_placed = table_only.perform(context) == 'false'
     if right_stage.perform(context) == 'left_park' and not left_placed:
         raise RuntimeError('left_park requires the left placement stage')
+    source_dx = slot_dx(LaunchConfiguration('source_slot').perform(context),
+                        shelf_inward(robot, 'shelf_1'))
+    target_dx = slot_dx(LaunchConfiguration('target_slot').perform(context),
+                        shelf_inward(robot, 'shelf_2'))
     task = {
         'source_shelf': 'shelf_1',
+        'source_dx': source_dx, 'target_dx': target_dx,
         'source_level': int(LaunchConfiguration('source_level').perform(context)),
         'target_shelf': 'shelf_2',
         'target_level': int(LaunchConfiguration('target_level').perform(context)),
@@ -111,7 +133,8 @@ def setup(context):
         'rigid_grasp': LaunchConfiguration('rigid_grasp').perform(context) == 'true',
     }
     single_process = LaunchConfiguration('single_process').perform(context) == 'true'
-    start = (shelf_cell(robot, task['source_shelf'], task['source_level']) if left_placed
+    start = (shelf_cell(robot, task['source_shelf'], task['source_level'], source_dx)
+             if left_placed
              else handoff_cell(robot))
     spawn = [f'{start[0]:.4f}', f'{start[1]:.4f}',
              f'{start[2] + GAZEBO_Z_OFFSET + SPAWN_DROP:.4f}']

@@ -15,7 +15,11 @@
 
 #include <Eigen/Geometry>
 #include <moveit/planning_scene/planning_scene.hpp>
+#include <moveit/robot_state/cartesian_interpolator.hpp>
 #include <moveit/robot_state/robot_state.hpp>
+#include <moveit_msgs/msg/attached_collision_object.hpp>
+#include <moveit_msgs/msg/collision_object.hpp>
+#include <shape_msgs/msg/solid_primitive.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #include "fr3_cooperative_control/left_transfer.hpp"
@@ -109,12 +113,13 @@ public:
     gripper_.command(0.04, false);
     arm().setJointValueTarget(std::vector<double>{0, -0.785, 0, -2.356, 0, 1.571, 0.785});
     executePlan();motion_.waitAt(nullptr);
-    Pose pick = initial;
-    pick.orientation.x = 0.5;pick.orientation.y = 0.5;
-    pick.orientation.z = -0.5;pick.orientation.w = 0.5;
     addBox(initial);allowFingers();
-    Pose pre = pick;pre.position.y += 0.12;
-    arm().setPoseTarget(pre);executePlan();arm().clearPoseTargets();motion_.waitAt(&pre);
+    // Rehearse the grasp candidates (planning only) and take the first that can approach, lift
+    // and retreat with joint margin: straight side grasp, then hand pitched 20/35 deg down.
+    const PickChoice choice = choosePickGrasp(initial);
+    const Pose pick = choice.pick;
+    const Pose pre = choice.pre;
+    arm().setJointValueTarget(choice.pre_joints);executePlan();motion_.waitAt(&pre);
     motion_.linear(pick);motion_.waitAt(&pick);
     RCLCPP_INFO(node_->get_logger(), "PICK TARGET SETTLED: closing gripper now");
     gripper_.command(0.018, true);
@@ -151,8 +156,10 @@ public:
       rise * 1000, max_drift * 1000, max_angle * 180 / M_PI);
     if (stage == "pick") {return;}
     contacts_.setCarrying(true);
-    RCLCPP_INFO(node_->get_logger(), "TRANSFER RETRACT START: 120 mm, gripper stays closed");
-    Pose clear = lifted;clear.position.y += 0.12;
+    RCLCPP_INFO(node_->get_logger(), "TRANSFER RETRACT START: %.0f mm, gripper stays closed",
+      choice.retreat * 1000);
+    Pose clear = lifted;
+    clear.position.y -= world_->sourceShelf().inward() * choice.retreat;
     motion_.linear(clear);motion_.waitAt(&clear);
     holdTransferred("AFTER RETRACT", reference, reference_angle, max_drift, max_angle, 1.0);
     // The shelf and table face opposite sides of the arm. Change hand orientation
@@ -161,6 +168,15 @@ public:
     Pose table = clear;
     table.orientation.x = -0.5;table.orientation.y = -0.5;
     table.orientation.z = -0.5;table.orientation.w = 0.5;
+    if (choice.pitch_deg != 0) {
+      // Pitched grasp: keep the carried box level above the table (nearest axis-aligned
+      // orientation of the box under the nominal transfer hand orientation).
+      const Eigen::Quaterniond level =
+        fc::nearestCubeRotation(rotation(table) * reference_angle);
+      const Eigen::Quaterniond hand = level * reference_angle.inverse();
+      table.orientation.w = hand.w();table.orientation.x = hand.x();
+      table.orientation.y = hand.y();table.orientation.z = hand.z();
+    }
     const Eigen::Vector3d desired_center(
       handoff.center.x(), handoff.center.y(), handoff.surface + 0.20);
     const Eigen::Vector3d target = desired_center - rotation(table) * reference;
@@ -352,7 +368,7 @@ private:
         for (int replan = 0; replan < 5 && !planned; ++replan) {
           motion_.setClampedStartState();
           planned = arm().plan(approach) == moveit::core::MoveItErrorCode::SUCCESS &&
-            carryClearance(approach, relative, relative_angle, "TABLE APPROACH");
+            carryClearance(approach, relative, relative_angle, "TABLE APPROACH", 0.20);
           if (!planned) {
             RCLCPP_WARN(node_->get_logger(),
               "TABLE APPROACH REPLAN %d/5: candidate=%d plan rejected", replan + 1, attempt + 1);
@@ -548,6 +564,104 @@ private:
       xy_error(current_box) * 1000, max_slip * 1000, box_.tilt(current_box) * 180 / M_PI);
   }
 
+  struct PickChoice
+  {
+    Pose pick, pre;
+    std::vector<double> pre_joints;
+    double pitch_deg = 0, retreat = 0.12;
+  };
+  // Grasp candidates for the source shelf cell, rehearsed with the planning margin (0.07 rad):
+  // IK at the pre-grasp point `retreat` in front of the box, fine approach to the grasp, then
+  // (box attached) lift 8 cm and retreat. Preference: longer retreat, then smaller pitch.
+  PickChoice choosePickGrasp(const Pose & box)
+  {
+    constexpr double kPlanMargin = 0.07, kExecMargin = 0.05;
+    // Owned by a shared_ptr: probeExit() derives diff scenes from it.
+    const auto scene_ptr = std::make_shared<planning_scene::PlanningScene>(arm().getRobotModel());
+    auto & scene = *scene_ptr;
+    require(scene.setPlanningSceneMsg(motion_.sceneSnapshot()), "Pick probe scene import failed");
+    const auto * group = scene.getRobotModel()->getJointModelGroup(names_.group);
+    const auto * tcp_link = scene.getRobotModel()->getLinkModel(tcp());
+    const Eigen::Vector3d in = world_->sourceShelf().inward() * Eigen::Vector3d::UnitY();
+    const Eigen::Vector3d down = -Eigen::Vector3d::UnitZ();
+    const auto valid = motion_.collisionCheck(scene, kPlanMargin);
+    for (const double retreat : {0.12, 0.08}) {
+      for (const double pitch : {0.0, 20.0, 35.0}) {
+        const double a = pitch * M_PI / 180.0;
+        const Eigen::Quaterniond q = fc::handFrame(
+          std::cos(a) * in + std::sin(a) * down, Eigen::Vector3d::UnitX());
+        PickChoice c;c.pitch_deg = pitch;c.retreat = retreat;
+        c.pick = box;
+        c.pick.orientation.w = q.w();c.pick.orientation.x = q.x();
+        c.pick.orientation.y = q.y();c.pick.orientation.z = q.z();
+        c.pre = c.pick;
+        c.pre.position.x -= retreat * in.x();c.pre.position.y -= retreat * in.y();
+        const char * stage = "pre-grasp IK";
+        Eigen::Isometry3d pre = Eigen::Isometry3d::Identity();
+        pre.linear() = q.toRotationMatrix();pre.translation() = point(c.pre);
+        for (int attempt = 0; attempt < 12; ++attempt) {
+          auto state = scene.getCurrentState();
+          if (attempt > 0) {state.setToRandomPositions(group);}
+          if (!state.setFromIK(group, pre, tcp(), 0.08, valid)) {continue;}
+          stage = "approach";
+          std::vector<moveit::core::RobotStatePtr> approach;
+          if (!motion_.checkedFinePath(scene, state, c.pick, approach, kPlanMargin)) {continue;}
+          stage = "lift/retreat";
+          if (!probeExit(scene, *approach.back(), box, in, retreat, kExecMargin, group, tcp_link)) {
+            continue;
+          }
+          state.copyJointGroupPositions(group, c.pre_joints);
+          RCLCPP_INFO(node_->get_logger(),
+            "PICK GRASP SELECTED: pitch=%.0f deg retreat=%.0f mm (candidate %d)", pitch,
+            retreat * 1000, attempt + 1);
+          return c;
+        }
+        RCLCPP_INFO(node_->get_logger(), "PICK GRASP REJECTED: pitch=%.0f deg retreat=%.0f mm, %s",
+          pitch, retreat * 1000, stage);
+      }
+    }
+    throw std::runtime_error("No pick grasp with a collision-checked approach, lift and retreat");
+  }
+  // With the box attached at the grasp, lift 8 cm and retreat `retreat` away from the shelf.
+  bool probeExit(const planning_scene::PlanningScene & scene, moveit::core::RobotState state,
+    const Pose & box, const Eigen::Vector3d & in, double retreat, double margin,
+    const moveit::core::JointModelGroup * group, const moveit::core::LinkModel * tcp_link)
+  {
+    auto held = scene.diff();
+    moveit_msgs::msg::CollisionObject remove;remove.id = "target_box";
+    remove.header.frame_id = "world";remove.operation = remove.REMOVE;
+    held->processCollisionObjectMsg(remove);
+    state.update();
+    const Eigen::Isometry3d grasp = state.getGlobalLinkTransform(tcp_link);
+    Eigen::Isometry3d box_world = Eigen::Isometry3d::Identity();
+    box_world.translation() = point(box);box_world.linear() = rotation(box).toRotationMatrix();
+    const Eigen::Isometry3d relative = grasp.inverse() * box_world;
+    moveit_msgs::msg::AttachedCollisionObject attached;
+    attached.link_name = tcp();
+    attached.touch_links = {names_.left_finger, names_.right_finger, names_.hand};
+    attached.object.id = "probe_box";attached.object.header.frame_id = tcp();
+    attached.object.operation = attached.object.ADD;
+    shape_msgs::msg::SolidPrimitive primitive;primitive.type = primitive.BOX;
+    primitive.dimensions = {task_.box_size, task_.box_size, task_.box_size};
+    Pose p;p.position.x = relative.translation().x();p.position.y = relative.translation().y();
+    p.position.z = relative.translation().z();
+    const Eigen::Quaterniond r(relative.rotation());
+    p.orientation.w = r.w();p.orientation.x = r.x();p.orientation.y = r.y();p.orientation.z = r.z();
+    attached.object.primitives.push_back(primitive);attached.object.primitive_poses.push_back(p);
+    held->processAttachedCollisionObjectMsg(attached);
+    held->setCurrentState(state);
+    auto start = held->getCurrentState();
+    Eigen::Isometry3d up = grasp;up.translation().z() += 0.08;
+    Eigen::Isometry3d out = up;out.translation() -= retreat * in;
+    const EigenSTL::vector_Isometry3d waypoints = {up, out};
+    std::vector<moveit::core::RobotStatePtr> path;
+    const double fraction = moveit::core::CartesianInterpolator::computeCartesianPath(
+      &start, group, path, tcp_link, waypoints, true, moveit::core::MaxEEFStep(0.002),
+      moveit::core::CartesianPrecision{}, motion_.collisionCheck(*held, margin),
+      kinematics::KinematicsQueryOptions());
+    return fraction >= 0.999 && !path.empty();
+  }
+
   void holdTransferred(
     const char * label, const Eigen::Vector3d & reference,
     const Eigen::Quaterniond & reference_angle, double & max_drift, double & max_angle,
@@ -576,9 +690,11 @@ private:
   // carry plan, require (a) >= 30 mm above the tabletop while over the margin-expanded
   // table footprint and (b) >= 15 mm from every shelf post and board (box half-diagonal,
   // box half-height along world z from its current orientation).
+  // min_post_gap: the table approach starts above the table and has no reason to come back
+  // near a shelf (a long swing that rotates the held box); it requires 0.20 m.
   bool carryClearance(
     const Group::Plan & plan, const Eigen::Vector3d & reference,
-    const Eigen::Quaterniond & reference_angle, const char * label)
+    const Eigen::Quaterniond & reference_angle, const char * label, double min_post_gap = 0.015)
   {
     constexpr double kTableMargin = 0.03, kShelfGap = 0.015;
     const double diagonal = world_->boxHalfDiagonal();
@@ -619,12 +735,13 @@ private:
         }
       }
     }
-    const bool ok = min_bottom >= table_floor && min_post >= kShelfGap && min_board >= kShelfGap;
+    const bool ok = min_bottom >= table_floor && min_post >= std::max(kShelfGap, min_post_gap) &&
+      min_board >= kShelfGap;
     RCLCPP_INFO(node_->get_logger(),
       "%s CLEARANCE %s: min box bottom over table=%.4f m (limit %.3f) "
-      "min shelf post gap=%.1f mm, board gap=%.1f mm (limits 15)", label,
+      "min shelf post gap=%.1f mm (limit %.0f), board gap=%.1f mm (limit 15)", label,
       ok ? "OK" : "REJECTED", min_bottom, table_floor, min_post * 1000,
-      std::isfinite(min_board) ? min_board * 1000 : 9999.0);
+      std::max(kShelfGap, min_post_gap) * 1000, std::isfinite(min_board) ? min_board * 1000 : 9999.0);
     return ok;
   }
   void carrySafe()

@@ -34,6 +34,10 @@ double ArmMotion::jointLimitMargin(
 {
   double margin = std::numeric_limits<double>::infinity();
   for (const auto & name : group->getVariableNames()) {
+    // joint5's planning bound (+/-2.60 rad, fr3_moveit_params.py) is an artificial limit kept
+    // 0.276 rad inside its physical stop (+/-2.876 rad); it is enforced by satisfiesBounds and
+    // needs no extra margin. The margin protects the physical limits of the other joints.
+    if (name.size() >= 7 && name.compare(name.size() - 7, 7, "_joint5") == 0) {continue;}
     const auto & bounds = state.getRobotModel()->getVariableBounds(name);
     const double position = state.getVariablePosition(name);
     margin = std::min({margin, position - bounds.min_position_, bounds.max_position_ - position});
