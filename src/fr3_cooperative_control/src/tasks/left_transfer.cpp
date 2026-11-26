@@ -193,7 +193,7 @@ public:
     arm().setPoseTarget(table);
     executePlan(clear_of_table, [this, &reference, &reference_angle](const Group::Plan & plan) {
         executeMonitored(plan.trajectory, "TABLE TRANSFER", reference, reference_angle);
-      });
+      }, 3);  // shortest of 3 accepted routes
     arm().clearPoseTargets();
     motion_.waitAt(&table);
     holdTransferred("ABOVE TABLE", reference, reference_angle, max_drift, max_angle);
@@ -229,13 +229,14 @@ private:
     motion_.setBoxCollisions(entries);
   }
   void executePlan(const fc::ArmMotion::Accept & accept = nullptr,
-    const fc::ArmMotion::Run & run = nullptr)
+    const fc::ArmMotion::Run & run = nullptr, int best_of = 1)
   {
     // OMPL paths are sometimes rejected by ValidateSolution after dense time
     // parameterization (arm link touching the table). Each attempt takes ~0.1 s,
     // so allow more fresh attempts; collision validation itself is unchanged.
     fc::PlanOptions options;
     options.attempts = 10;options.clamp_start = true;options.log_attempts = true;
+    options.best_of = best_of;
     motion_.executePlan(options, accept, run);
   }
 
@@ -367,17 +368,30 @@ private:
         }
         // Replan the same (nearby) posture before moving to a random IK seed:
         // a random posture can mean a long reconfiguration that rotates the held box.
-        Group::Plan approach;bool planned = false;
-        for (int replan = 0; replan < 5 && !planned; ++replan) {
+        // Up to 3 accepted routes to this posture (6 tries); keep the shortest.
+        Group::Plan approach;int accepted = 0;
+        for (int replan = 0; replan < 6 && accepted < 3; ++replan) {
           motion_.setClampedStartState();
-          planned = arm().plan(approach) == moveit::core::MoveItErrorCode::SUCCESS &&
-            carryClearance(approach, relative, relative_angle, "TABLE APPROACH", 0.20);
-          if (!planned) {
+          Group::Plan route;
+          if (arm().plan(route) == moveit::core::MoveItErrorCode::SUCCESS &&
+            carryClearance(route, relative, relative_angle, "TABLE APPROACH", 0.20))
+          {
+            if (accepted == 0 ||
+              fc::ArmMotion::planDuration(route) < fc::ArmMotion::planDuration(approach))
+            {
+              approach = route;
+            }
+            ++accepted;
+          } else {
             RCLCPP_WARN(node_->get_logger(),
-              "TABLE APPROACH REPLAN %d/5: candidate=%d plan rejected", replan + 1, attempt + 1);
+              "TABLE APPROACH REPLAN %d/6: candidate=%d plan rejected", replan + 1, attempt + 1);
           }
         }
+        const bool planned = accepted > 0;
         if (planned) {
+          RCLCPP_INFO(node_->get_logger(),
+            "TABLE APPROACH SELECTED: shortest of %d accepted, %.1f s", accepted,
+            fc::ArmMotion::planDuration(approach));
           RCLCPP_INFO(node_->get_logger(),
             "TABLE DESCENT PROBE PASSED: pass=%d candidate=%d points=%zu",
             pass + 1, attempt + 1, path.size());

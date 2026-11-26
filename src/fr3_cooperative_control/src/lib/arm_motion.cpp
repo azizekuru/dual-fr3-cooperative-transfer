@@ -371,19 +371,41 @@ void ArmMotion::setClampedStartState()
   group_->setStartState(start);
 }
 
+double ArmMotion::planDuration(const Group::Plan & plan)
+{
+  const auto & points = plan.trajectory.joint_trajectory.points;
+  if (points.empty()) {return 0.0;}
+  const auto & t = points.back().time_from_start;
+  return t.sec + 1e-9 * t.nanosec;
+}
+
 void ArmMotion::executePlan(const PlanOptions & options, const Accept & accept, const Run & run)
 {
-  Group::Plan plan;bool planned = false;
-  for (int attempt = 0; attempt < options.attempts; ++attempt) {
+  Group::Plan plan;int accepted = 0;
+  std::vector<double> durations;
+  for (int attempt = 0; attempt < options.attempts && accepted < options.best_of; ++attempt) {
     if (options.clamp_start) {setClampedStartState();} else {group_->setStartStateToCurrentState();}
-    if (group_->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS &&
-      (!accept || accept(plan))) {planned = true;break;}
+    Group::Plan candidate;
+    if (group_->plan(candidate) == moveit::core::MoveItErrorCode::SUCCESS &&
+      (!accept || accept(candidate)))
+    {
+      durations.push_back(planDuration(candidate));
+      if (accepted == 0 || planDuration(candidate) < planDuration(plan)) {plan = candidate;}
+      ++accepted;
+      continue;
+    }
     if (options.log_attempts) {
       RCLCPP_WARN(node_->get_logger(), "PLAN ATTEMPT %d/%d rejected; replanning",
         attempt + 1, options.attempts);
     }
   }
-  require(planned, "Planning failed");
+  require(accepted > 0, "Planning failed");
+  if (options.best_of > 1) {
+    std::string all;
+    for (double d : durations) {all += (all.empty() ? "" : ", ") + std::to_string(d).substr(0, 4);}
+    RCLCPP_INFO(node_->get_logger(), "PLAN SELECTED: shortest of %d accepted, %.1f s (%s s)",
+      accepted, planDuration(plan), all.c_str());
+  }
   if (run) {run(plan);return;}
   if (before_execute_) {before_execute_();}
   require(group_->execute(plan) == moveit::core::MoveItErrorCode::SUCCESS, "Execution failed");

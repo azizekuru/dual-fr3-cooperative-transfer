@@ -44,6 +44,9 @@ struct PlanOptions
   int attempts = 3;
   bool clamp_start = false;     // clamp tiny artificial-bound excursions of the start state
   bool log_attempts = false;
+  // Collect up to this many accepted plans and execute the shortest (OMPL is randomised;
+  // the first accepted route can be much longer than necessary).
+  int best_of = 1;
 };
 
 class ArmMotion
@@ -90,6 +93,8 @@ public:
   // Set box-vs-link allowed collisions; links not listed keep their current entry.
   void setBoxCollisions(const std::vector<std::pair<std::string, bool>> & entries);
 
+  // Duration of a timed plan (seconds).
+  static double planDuration(const Group::Plan & plan);
   static double jointLimitMargin(
     const moveit::core::RobotState & state, const moveit::core::JointModelGroup * group);
   // Largest joint change between consecutive waypoints. A Cartesian interpolation whose IK
