@@ -216,7 +216,8 @@ robot_trajectory::RobotTrajectory ArmMotion::timeShelfDescent(
   return timed;
 }
 
-void ArmMotion::linear(const Pose & target, double scale, LinearMode mode)
+void ArmMotion::linear(
+  const Pose & target, double scale, LinearMode mode, double min_joint_margin)
 {
   if (before_plan_) {before_plan_();}
   group_->setStartStateToCurrentState();moveit_msgs::msg::RobotTrajectory msg;
@@ -224,8 +225,10 @@ void ArmMotion::linear(const Pose & target, double scale, LinearMode mode)
   require(static_cast<bool>(state), "No trajectory state");
   robot_trajectory::RobotTrajectory trajectory(group_->getRobotModel(), names_.group);
   const bool pickup = mode == LinearMode::pickup;
-  const bool fine = pickup || mode == LinearMode::precise || scale <= profile_.fine_scale_threshold;
-  if (fine) {finePath(target, trajectory, pickup ? 0.05 : -1.0);} else {
+  const double margin = std::max(pickup ? 0.05 : -1.0, min_joint_margin);
+  const bool fine = margin >= 0 || mode == LinearMode::precise ||
+    scale <= profile_.fine_scale_threshold;
+  if (fine) {finePath(target, trajectory, margin);} else {
     const double fraction = group_->computeCartesianPath({target}, 0.002, msg, true);
     if (fraction < 0.999) {
       moveit_msgs::msg::RobotTrajectory probe;

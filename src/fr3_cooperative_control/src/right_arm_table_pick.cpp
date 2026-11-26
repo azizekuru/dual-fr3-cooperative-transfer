@@ -427,6 +427,8 @@ private:
             if (planShelfTransfer(*scene, *reverse.back(), midpoint, relative, relative_angle,
                 transfer))
             {
+              // Same in-shelf posture for every midpoint: if it fails, move on to the next candidate.
+              if (!probeShelfInterior(*seating_scene, *reverse.back(), q, relative)) {break;}
               RCLCPP_INFO(node_->get_logger(),
                 "SHELF TWO-STAGE PLAN PASSED: pass=%d variant=%zu midpoint_box=(%.3f, %.3f, %.3f)",
                 pass + 1, variant, center.x(), center.y(), center.z());
@@ -437,6 +439,45 @@ private:
       }
     }
     throw std::runtime_error("No collision-checked two-stage shelf placement approach found");
+  }
+
+  // Rehearse the in-shelf motions the way placeOnShelf executes them (0.1 mm fine paths,
+  // every waypoint >= kShelfJointMargin from the joint limits): insert, descent, seat and the
+  // open-gripper retreat (up, then out). A posture that would slide onto a joint limit inside
+  // the shelf is rejected before the arm moves.
+  bool probeShelfInterior(
+    const planning_scene::PlanningScene & scene, const moveit::core::RobotState & front,
+    const Eigen::Quaterniond & q, const Eigen::Vector3d & relative)
+  {
+    const auto tcp_for = [&q, &relative](const Eigen::Vector3d & box_center) {
+        const Eigen::Vector3d t = box_center - q * relative;
+        Pose p;p.position.x = t.x();p.position.y = t.y();p.position.z = t.z();
+        p.orientation.w = q.w();p.orientation.x = q.x();p.orientation.y = q.y();
+        p.orientation.z = q.z();
+        return p;
+      };
+    const Eigen::Vector3d rest = cell_.center;
+    const std::array<std::pair<const char *, Eigen::Vector3d>, 5> stages = {{
+      {"insert", insertCenter()},
+      {"descent", rest + Eigen::Vector3d(0, 0, 0.002)},
+      {"seat", rest},
+      {"retreat-up", rest + Eigen::Vector3d(0, 0, 0.08)},
+      {"retreat-out", rest + Eigen::Vector3d(0, -inward_ * 0.12, 0.08)}}};
+    const auto * group = front.getJointModelGroup(names_.group);
+    auto state = front;
+    double margin = jointLimitMargin(state, group);
+    for (const auto & [stage, center] : stages) {
+      std::vector<moveit::core::RobotStatePtr> path;
+      if (!motion_.checkedFinePath(scene, state, tcp_for(center), path, kShelfJointMargin)) {
+        RCLCPP_INFO(node_->get_logger(), "SHELF INTERIOR PROBE REJECTED: stage=%s", stage);
+        return false;
+      }
+      for (const auto & waypoint : path) {margin = std::min(margin, jointLimitMargin(*waypoint, group));}
+      state = *path.back();
+    }
+    RCLCPP_INFO(node_->get_logger(), "SHELF INTERIOR PROBE PASSED: min joint margin=%.4f rad",
+      margin);
+    return true;
   }
 
   bool planShelfTransfer(
@@ -638,7 +679,7 @@ private:
       if (attempt == 0) {
         executeShelfTransfer(transfer.advance, relative, relative_angle);
       } else {
-        motion_.linear(goal, 0.01);
+        motion_.linear(goal, 0.01, LinearMode::normal, kShelfJointMargin);
       }
       motion_.waitAt(&goal, 0.0003, 0.0015);box = box_.stable();safe();
       if (box_.tilt(box) < 0.00873 && (point(box) - frontCenter()).norm() < 0.001) {
@@ -653,14 +694,16 @@ private:
     Eigen::Vector3d target = insertCenter() - aligned * relative;
     goal.position.x = target.x();goal.position.y = target.y();goal.position.z = target.z();
     RCLCPP_INFO(node_->get_logger(), "SHELF INSERT START: 120 mm into second shelf");
-    motion_.linear(goal, 0.03);motion_.waitAt(&goal, 0.0003, 0.0015);
+    motion_.linear(goal, 0.03, LinearMode::normal, kShelfJointMargin);
+    motion_.waitAt(&goal, 0.0003, 0.0015);
     box = box_.fresh();hand = arm().getCurrentPose(tcp()).pose;syncHeldBox(box, hand);
     const double descent_z = cell_.center.z() + 0.002;  // 2 mm above the resting centre
     goal.position.x = hand.position.x + cell_.center.x() - box.position.x;
     goal.position.y = hand.position.y + cell_.center.y() - box.position.y;
     goal.position.z = hand.position.z + descent_z - box.position.z;
     RCLCPP_INFO(node_->get_logger(), "SHELF DESCENT START: center z=%.4f", descent_z);
-    motion_.linear(goal, 0.02, LinearMode::shelf_descent);motion_.waitAt(&goal, 0.0003, 0.0015);
+    motion_.linear(goal, 0.02, LinearMode::shelf_descent, kShelfJointMargin);
+    motion_.waitAt(&goal, 0.0003, 0.0015);
     contacts_.setSeating(true);
     configureContacts(true, false, true);
     const auto before_relax = box_.fresh();gripper_.command(0.0198, true);
@@ -683,7 +726,8 @@ private:
       goal.orientation.w = aligned.w();goal.orientation.x = aligned.x();
       goal.orientation.y = aligned.y();goal.orientation.z = aligned.z();
       goal.position.z -= std::min(0.0005, gap + 0.0001);
-      motion_.linear(goal, 0.01);motion_.waitAt(&goal, 0.00015, 0.0015);
+      motion_.linear(goal, 0.01, LinearMode::normal, kShelfJointMargin);
+      motion_.waitAt(&goal, 0.00015, 0.0015);
     }
     require(seated, "Shelf support not established in bounded steps");waitShelfSupport();
     const auto release_reference = box_.fresh();
@@ -695,12 +739,14 @@ private:
     release_slip = std::max(release_slip, (point(box) - point(release_reference)).norm());
     addBox(box);goal = arm().getCurrentPose(tcp()).pose;goal.position.z += 0.08;
     RCLCPP_INFO(node_->get_logger(), "SHELF RETREAT CLEARANCE: raise 80 mm with open gripper");
-    motion_.linear(goal, 0.02);motion_.waitAt(&goal, 0.001, 0.005);
+    motion_.linear(goal, 0.02, LinearMode::normal, kShelfJointMargin);
+    motion_.waitAt(&goal, 0.001, 0.005);
     require(onShelf(), "Box lost shelf support during clearance lift");
     goal = arm().getCurrentPose(tcp()).pose;goal.position.y -= inward_ * 0.12;
     RCLCPP_INFO(node_->get_logger(),
         "SHELF RETREAT START: 120 mm at clearance height, no ready return");
-    motion_.linear(goal, 0.10);motion_.waitAt(&goal);  // gripper open, above box
+    motion_.linear(goal, 0.10, LinearMode::normal, kShelfJointMargin);
+    motion_.waitAt(&goal);  // gripper open, above box
     const auto xy_error = [this](const Pose & b) {
         return std::hypot(b.position.x - cell_.center.x(), b.position.y - cell_.center.y());
       };
@@ -924,6 +970,8 @@ private:
     return std::min(angle - bounds.min_position_, bounds.max_position_ - angle);
   }
   static constexpr double pickup_joint_margin_ = 0.05;
+  // Joint-limit margin kept on every in-shelf motion (planning rehearsal and execution).
+  static constexpr double kShelfJointMargin = 0.05;
   Group::Plan planPickupApproach(const Pose & pre, const Pose & pick)
   {
     planning_scene::PlanningScene scene(arm().getRobotModel());

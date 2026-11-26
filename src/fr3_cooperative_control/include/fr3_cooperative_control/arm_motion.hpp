@@ -71,7 +71,9 @@ public:
     const Pose & target, std::vector<moveit::core::RobotStatePtr> & path,
     double min_joint_margin = -1.0, bool report = false);
   bool timeWithRetry(robot_trajectory::RobotTrajectory & trajectory, double scale, bool fine);
-  void linear(const Pose & target, double scale = 0.1, LinearMode mode = LinearMode::normal);
+  // min_joint_margin >= 0 forces the fine path and requires that margin on every waypoint.
+  void linear(const Pose & target, double scale = 0.1, LinearMode mode = LinearMode::normal,
+    double min_joint_margin = -1.0);
   // Joints still for 3 x 100 ms and TCP within tolerance; optional small pickup correction.
   void waitAt(const Pose * target, double position_tolerance = 0.003,
     double angle_tolerance = 0.025, bool allow_pickup_correction = false);
