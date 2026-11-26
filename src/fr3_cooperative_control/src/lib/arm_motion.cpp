@@ -139,7 +139,7 @@ bool ArmMotion::timeWithRetry(
     }
     trajectory_processing::TimeOptimalTrajectoryGeneration timing(
       variants[i][0], variants[i][1], variants[i][2]);
-    if (timing.computeTimeStamps(trajectory, scale, scale)) {return true;}
+    if (timing.computeTimeStamps(trajectory, speed(scale), speed(scale))) {return true;}
   }
   trajectory = robot_trajectory::RobotTrajectory(original, true);
   return false;
@@ -179,9 +179,10 @@ robot_trajectory::RobotTrajectory ArmMotion::timeShelfDescent(
     double max_delta = 0;
     for (const auto & name : names) {
       const auto & limits = raw.getRobotModel()->getVariableBounds(name);
-      const double velocity = std::min(-limits.min_velocity_, limits.max_velocity_) * scale;
+      const double velocity =
+        std::min(-limits.min_velocity_, limits.max_velocity_) * speed(scale);
       const double acceleration =
-        std::min(-limits.min_acceleration_, limits.max_acceleration_) * scale;
+        std::min(-limits.min_acceleration_, limits.max_acceleration_) * speed(scale);
       require(limits.velocity_bounded_ && limits.acceleration_bounded_ &&
         velocity > 0 && acceleration > 0, "Missing joint limits for shelf timing fallback");
       const double delta = std::abs(b.getVariablePosition(name) - a.getVariablePosition(name));

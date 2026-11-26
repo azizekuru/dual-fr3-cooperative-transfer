@@ -58,6 +58,8 @@ struct TaskConfig
   double cell_inset = 0.03;  // box centre behind the board's front edge
   double box_size = 0.04;
   double gazebo_z_offset = 0.05;  // Gazebo world z minus MoveIt world z
+  double speed_scale = 1.0;       // test mode: multiplies every motion speed (capped at 1.0)
+  bool rigid_grasp = false;       // test mode: weld the box to the hand while grasped
 
   static TaskConfig fromParameters(const rclcpp::Node & node);
 };

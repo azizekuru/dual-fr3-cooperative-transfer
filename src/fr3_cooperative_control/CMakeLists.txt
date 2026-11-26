@@ -20,6 +20,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(shape_msgs REQUIRED)
 find_package(ros_gz_interfaces REQUIRED)
 find_package(geometric_shapes REQUIRED)
+find_package(std_msgs REQUIRED)
 
 # --- Mevcut koordinator (degistirilmedi) ---
 add_executable(dual_arm_coordinator src/dual_arm_coordinator.cpp)
@@ -50,28 +51,30 @@ ament_target_dependencies(
   "tf2_geometry_msgs"
 )
 
-# --- Shared library: world model, box/contact/gripper monitors, arm motion toolbox ---
+# --- Shared library: world model, monitors, arm motion toolbox, left/right arm tasks ---
 set(CORE_DEPENDENCIES
   rclcpp rclcpp_action control_msgs controller_manager_msgs sensor_msgs shape_msgs ros_gz_interfaces
-  moveit_ros_planning_interface moveit_core moveit_msgs geometry_msgs geometric_shapes)
+  moveit_ros_planning_interface moveit_core moveit_msgs geometry_msgs geometric_shapes std_msgs)
 add_library(fr3_cooperative_core STATIC
   src/lib/world_model.cpp
   src/lib/box_tracker.cpp
   src/lib/gripper.cpp
   src/lib/contact_monitor.cpp
-  src/lib/arm_motion.cpp)
+  src/lib/arm_motion.cpp
+  src/tasks/left_transfer.cpp
+  src/tasks/right_transfer.cpp)
 target_include_directories(fr3_cooperative_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_compile_features(fr3_cooperative_core PUBLIC cxx_std_17)
 ament_target_dependencies(fr3_cooperative_core ${CORE_DEPENDENCIES})
 
-foreach(task_node single_arm_pick_test right_arm_table_pick)
+foreach(task_node single_arm_pick_test right_arm_table_pick transfer_task)
   add_executable(${task_node} src/${task_node}.cpp)
   target_link_libraries(${task_node} fr3_cooperative_core)
   ament_target_dependencies(${task_node} ${CORE_DEPENDENCIES})
 endforeach()
 
-install(TARGETS dual_arm_coordinator dual_arm_reach_test single_arm_pick_test right_arm_table_pick
+install(TARGETS dual_arm_coordinator dual_arm_reach_test single_arm_pick_test right_arm_table_pick transfer_task
   DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS scripts/gripper_alignment_check.py

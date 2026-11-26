@@ -1,6 +1,7 @@
 // Shared aliases and small helpers for the FR3 cooperative transfer nodes.
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 #include <string>
@@ -25,6 +26,17 @@ inline Eigen::Quaterniond rotation(const Pose & p)
 {
   return {p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z};
 }
+
+// Process-wide test speed factor (launch argument speed_scale, default 1.0). Every MoveIt
+// velocity/acceleration scale and every TOTG scale goes through speed(); fine-path selection
+// still uses the unscaled value, so path checks are unchanged.
+inline double & speedScaleStorage()
+{
+  static double value = 1.0;
+  return value;
+}
+inline void setSpeedScale(double value) {speedScaleStorage() = value > 0 ? value : 1.0;}
+inline double speed(double scale) {return std::min(1.0, scale * speedScaleStorage());}
 
 // A collision-checked fine Cartesian path could not be built (incomplete, joint jump or margin).
 class FinePathRejected : public std::runtime_error

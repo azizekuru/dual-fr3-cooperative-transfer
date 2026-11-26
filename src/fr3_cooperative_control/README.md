@@ -94,8 +94,10 @@ Görev düğümleri yalnızca görev mantığını içerir; ortak işler `fr3_co
 
 | Dosya | Görev |
 |---|---|
-| `src/single_arm_pick_test.cpp` | Sol kol: kaynak raf hücresinden alma, masaya taşıma ve koyma |
-| `src/right_arm_table_pick.cpp` | Sağ kol: sol kolu park etme, masadan alma, hedef raf hücresine koyma |
+| `src/tasks/left_transfer.cpp` | Sol kol görevi (`LeftTransfer`): kaynak raf hücresinden alma, masaya taşıma ve koyma |
+| `src/tasks/right_transfer.cpp` | Sağ kol görevi (`RightTransfer`): sol kolu park etme, masadan alma, hedef raf hücresine koyma |
+| `src/transfer_task.cpp` | Tek süreçli koordinatör: iki görevi sırayla çalıştırır (`single_process:=true`) |
+| `src/single_arm_pick_test.cpp`, `src/right_arm_table_pick.cpp` | Kolları ayrı süreçlerde çalıştıran ince giriş noktaları (varsayılan) |
 | `include/.../world_model.hpp` | Masa, raf, kat ve direk geometrisi robot modelinden okunur; görev hücreleri buradan hesaplanır |
 | `include/.../arm_motion.hpp` | Düz/hassas Kartezyen yol, TOTG zamanlama, bekleme, planla-yürüt, planlama sahnesi araçları |
 | `include/.../box_tracker.hpp` | Gazebo'dan kutu konumu (taze/sabit ölçüm, eğiklik, taban yüksekliği) |
@@ -107,6 +109,21 @@ Kodda sabit koordinat yoktur. Görev hücreleri launch argümanlarıyla seçilir
 ```bash
 ros2 launch fr3_cooperative_control table_handoff_test.launch.py right_stage:=shelf_place \
   source_level:=2 target_level:=2
+```
+
+Ek launch argümanları (varsayılanlar bugünkü davranışı verir):
+
+| Argüman | Varsayılan | Anlamı |
+|---|---|---|
+| `single_process` | `false` | `true`: iki kol görevi tek `transfer_task` sürecinde çalışır |
+| `speed_scale` | `1.0` | Test modu: tüm hareket hızlarını çarpar (en fazla 1.0'a kadar) |
+| `rigid_grasp` | `false` | Test modu: kavramada kutu ele kaynaklanır, bırakmadan önce çözülür (Gazebo DetachableJoint) |
+
+Hızlı yol testi örneği:
+
+```bash
+ros2 launch fr3_cooperative_control table_handoff_test.launch.py right_stage:=shelf_place \
+  single_process:=true rigid_grasp:=true speed_scale:=3.0
 ```
 
 Not: `source_level`/`target_level` şimdilik yalnızca 2. kat için doğrulanmıştır. Diğer katlar için

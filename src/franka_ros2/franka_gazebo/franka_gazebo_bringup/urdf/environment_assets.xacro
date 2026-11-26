@@ -2,6 +2,7 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <xacro:arg name="shelf2_y" default="1.20"/>
+  <xacro:arg name="box_weld" default="false"/>
 
   <!-- ================= MASA (TABLE) ================= -->
   <link name="table_link">
@@ -103,6 +104,27 @@
   <!-- Sol Raf (Shelf 1) ve Sağ Raf (Shelf 2) -->
   <xacro:shelf_macro prefix="shelf_1" parent="world" x="0.0" y="-1.2" z="0.0"/>
   <xacro:shelf_macro prefix="shelf_2" parent="world" x="0.0" y="$(arg shelf2_y)" z="0.0"/>
+
+  <!-- Rigid-grasp test mode (box_weld:=true): weld target_box to a hand (link7 carries the
+       lumped hand) on /box_weld/<side>/attach, remove it on /box_weld/<side>/detach. The system
+       welds as soon as the box spawns; the task nodes release it at start-up. -->
+  <xacro:macro name="box_weld" params="side">
+    <gazebo>
+      <plugin filename="gz-sim-detachable-joint-system" name="gz::sim::systems::DetachableJoint">
+        <parent_link>${side}_fr3v2_link7</parent_link>
+        <child_model>target_box</child_model>
+        <child_link>link</child_link>
+        <attach_topic>/box_weld/${side}/attach</attach_topic>
+        <detach_topic>/box_weld/${side}/detach</detach_topic>
+        <output_topic>/box_weld/${side}/state</output_topic>
+        <suppress_child_warning>true</suppress_child_warning>
+      </plugin>
+    </gazebo>
+  </xacro:macro>
+  <xacro:if value="$(arg box_weld)">
+    <xacro:box_weld side="left"/>
+    <xacro:box_weld side="right"/>
+  </xacro:if>
 
 
 </robot>

@@ -79,6 +79,12 @@ def generate_launch_description():
                               description='shelf_1 board the box starts on (1 = lowest)'),
         DeclareLaunchArgument('target_level', default_value='2', choices=LEVELS,
                               description='shelf_2 board the box is placed on (1 = lowest)'),
+        DeclareLaunchArgument('single_process', default_value='false', choices=['true', 'false'],
+                              description='Run both arm tasks in one transfer_task process'),
+        DeclareLaunchArgument('speed_scale', default_value='1.0',
+                              description='Test mode: multiply every motion speed (capped at 1)'),
+        DeclareLaunchArgument('rigid_grasp', default_value='false', choices=['true', 'false'],
+                              description='Test mode: weld the box to the hand while grasped'),
         OpaqueFunction(function=setup),
     ])
 
@@ -115,7 +121,10 @@ def setup(context):
         'target_level': int(LaunchConfiguration('target_level').perform(context)),
         'handoff_x': HANDOFF_XY[0], 'handoff_y': HANDOFF_XY[1],
         'cell_inset': CELL_INSET, 'box_size': BOX_SIZE, 'gazebo_z_offset': GAZEBO_Z_OFFSET,
+        'speed_scale': float(LaunchConfiguration('speed_scale').perform(context)),
+        'rigid_grasp': LaunchConfiguration('rigid_grasp').perform(context) == 'true',
     }
+    single_process = LaunchConfiguration('single_process').perform(context) == 'true'
     start = (shelf_cell(robot, task['source_shelf'], task['source_level']) if left_placed
              else handoff_cell(robot))
     spawn = [f'{start[0]:.4f}', f'{start[1]:.4f}',
@@ -128,6 +137,10 @@ def setup(context):
                       name='right_arm_table_pick', output='screen',
                       parameters=parameters + [task, {'stage': right_stage,
                                                       'left_placed': left_placed}])
+    coordinator = Node(package='fr3_cooperative_control', executable='transfer_task',
+                       name='transfer_task', output='screen',
+                       parameters=parameters + [task, {'right_stage': right_stage,
+                                                       'table_only': not left_placed}])
 
     def after_left(event, context):
         if event.returncode == 0:
@@ -168,15 +181,29 @@ def setup(context):
                        EnvironmentVariable('LD_PRELOAD', default_value='')]
     } if os.path.isfile(move_group_library) else {}
 
-    return [
+    weld_bridge = [
+        f'/box_weld/{side}/{topic}@{ros}{direction}{gz}'
+        for side in ('left', 'right')
+        for topic, ros, direction, gz in (
+            ('attach', 'std_msgs/msg/Empty', ']', 'gz.msgs.Empty'),
+            ('detach', 'std_msgs/msg/Empty', ']', 'gz.msgs.Empty'),
+            ('state', 'std_msgs/msg/String', '[', 'gz.msgs.StringMsg'))
+    ] if task['rigid_grasp'] else []
+    tasks = [coordinator] if single_process else [
         RegisterEventHandler(OnProcessExit(target_action=left_task, on_exit=after_left)),
         RegisterEventHandler(OnProcessExit(target_action=right_task, on_exit=after_right)),
+        left_task,
+        OpaqueFunction(function=start_table_only),
+    ]
+
+    return [
         IncludeLaunchDescription(PythonLaunchDescriptionSource(os.path.join(
             bringup, 'launch', 'gazebo_fr3_duo_example.launch.py')),
             launch_arguments={
                 'rviz': 'false',
                 'world': 'placement.sdf',
                 'shelf2_y': shelf_y,
+                'box_weld': 'true' if task['rigid_grasp'] else 'false',
                 'gz_args': PythonExpression([
                     "'-r -s' if '", LaunchConfiguration('headless'), "' == 'true' else '-r'"])
             }.items()),
@@ -200,7 +227,7 @@ def setup(context):
                  '@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts',
                  '/world/empty/model/fr3_duo_gazebo/link/shelf_2_link/sensor/'
                  'shelf_contacts/contact'
-                 '@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts'],
+                 '@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts'] + weld_bridge,
              remappings=[('/model/target_box/pose', '/target_box/pose'),
                          ('/world/empty/model/target_box/link/link/sensor/box_contacts/contact',
                           '/placement/box_contacts'),
@@ -208,6 +235,4 @@ def setup(context):
                           'table_contacts/contact', '/placement/table_contacts'),
                          ('/world/empty/model/fr3_duo_gazebo/link/shelf_2_link/sensor/'
                           'shelf_contacts/contact', '/placement/shelf2_contacts')]),
-        left_task,
-        OpaqueFunction(function=start_table_only),
-    ]
+    ] + tasks

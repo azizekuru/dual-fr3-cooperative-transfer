@@ -60,6 +60,8 @@ TaskConfig TaskConfig::fromParameters(const rclcpp::Node & node)
   node.get_parameter_or("cell_inset", c.cell_inset, c.cell_inset);
   node.get_parameter_or("box_size", c.box_size, c.box_size);
   node.get_parameter_or("gazebo_z_offset", c.gazebo_z_offset, c.gazebo_z_offset);
+  node.get_parameter_or("speed_scale", c.speed_scale, c.speed_scale);
+  node.get_parameter_or("rigid_grasp", c.rigid_grasp, c.rigid_grasp);
   return c;
 }
 
