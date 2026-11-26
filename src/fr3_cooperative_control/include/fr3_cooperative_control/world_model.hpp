@@ -62,6 +62,7 @@ struct TaskConfig
   double gazebo_z_offset = 0.05;  // Gazebo world z minus MoveIt world z
   double speed_scale = 1.0;       // test mode: multiplies every motion speed (capped at 1.0)
   bool rigid_grasp = false;       // test mode: weld the box to the hand while grasped
+  std::string verify = "full";    // "fast": shorter hold/observation windows (common.hpp)
 
   static TaskConfig fromParameters(const rclcpp::Node & node);
 };

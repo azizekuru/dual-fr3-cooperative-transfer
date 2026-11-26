@@ -72,6 +72,7 @@ public:
     motion_(node, names_, leftProfile(), nullptr, [this] {carrySafe();})
   {
     fc::setSpeedScale(task_.speed_scale);
+    fc::setVerifyMode(task_.verify);
     contacts_.addSurface("TABLE", "/placement/table_contacts", "", false);
     if (task_.rigid_grasp) {
       left_weld_ = std::make_unique<fc::BoxWeld>(node_, "left");
@@ -142,7 +143,8 @@ public:
       "Box shifted sideways during lift");
     const auto sim_start = node_->now();const auto wall_start = Wall::now();
     double max_drift = 0, max_angle = 0;
-    while ((node_->now() - sim_start).seconds() < 3.0) {
+    const double pick_hold = fc::holdSeconds(3.0);
+    while ((node_->now() - sim_start).seconds() < pick_hold) {
       require(Wall::now() - wall_start < 30s, "Hold simulation clock timed out");
       const Pose box = box_.fresh();const Pose tcp_pose = arm().getCurrentPose(tcp()).pose;
       max_drift = std::max(max_drift, (rotation(tcp_pose).inverse() *
@@ -153,8 +155,8 @@ public:
       std::this_thread::sleep_for(100ms);
     }
     RCLCPP_INFO(node_->get_logger(),
-      "PICK TEST PASSED: lift=%.2f mm hold=3 sim s drift=%.3f mm angle=%.3f deg; gripper stays closed",
-      rise * 1000, max_drift * 1000, max_angle * 180 / M_PI);
+      "PICK TEST PASSED: lift=%.2f mm hold=%.1f sim s drift=%.3f mm angle=%.3f deg; gripper stays closed",
+      rise * 1000, pick_hold, max_drift * 1000, max_angle * 180 / M_PI);
     if (stage == "pick") {return;}
     contacts_.setCarrying(true);
     RCLCPP_INFO(node_->get_logger(), "TRANSFER RETRACT START: %.0f mm, gripper stays closed",
@@ -306,10 +308,10 @@ private:
       }
       if (!good) {since = -1;} else if (since < 0) {
         since = now;
-      } else if (now - since >= 1000000000) {
+      } else if (now - since >= fc::holdNanoseconds(1.0)) {
         RCLCPP_INFO(node_->get_logger(),
-            "SUPPORT VERIFIED: 1 sim s table contact, bottom_gap=%.3f mm (samples=%d resets=%d)",
-          (box_.bottom(box) - surface) * 1000, samples, resets);return;
+            "SUPPORT VERIFIED: %.1f sim s table contact, bottom_gap=%.3f mm (samples=%d resets=%d)",
+          fc::holdSeconds(1.0), (box_.bottom(box) - surface) * 1000, samples, resets);return;
       }
       std::this_thread::sleep_for(100ms);
     }
@@ -409,7 +411,8 @@ private:
     RCLCPP_INFO(node_->get_logger(), "PLACE TOP-DOWN ALIGN AND APPROACH: box center z=%.3f",
       pre_center.z());
     arm().setGoalPositionTolerance(0.00015);arm().setGoalOrientationTolerance(0.0005);
-    arm().setMaxVelocityScalingFactor(fc::speed(0.05));arm().setMaxAccelerationScalingFactor(fc::speed(0.05));
+    // Table approach: 10 % (was 5 %); the box is monitored at 100 Hz during the motion.
+    arm().setMaxVelocityScalingFactor(fc::speed(0.10));arm().setMaxAccelerationScalingFactor(fc::speed(0.10));
     Pose descent = goal;
     descent.position.z += rest_z - pre_center.z();
     arm().setGoalJointTolerance(0.00005);
@@ -439,7 +442,7 @@ private:
     RCLCPP_INFO(node_->get_logger(), "PLACE DESCENT: box center z=%.3f, then contact steps",
       rest_z);
     try {
-      motion_.linear(goal, 0.02, fc::LinearMode::precise);
+      motion_.linear(goal, 0.05, fc::LinearMode::precise);  // 2 cm descent, 5 % (was 2 %)
     } catch (const fc::FinePathRejected & error) {
       RCLCPP_WARN(node_->get_logger(), "TABLE DESCENT PLAN REJECTED: %s", error.what());
       return false;
@@ -561,7 +564,7 @@ private:
     const auto xy_error = [&handoff](const Pose & box) {
         return std::hypot(box.position.x - handoff.center.x(), box.position.y - handoff.center.y());
       };
-    while ((node_->now() - start).seconds() < 3.0) {
+    while ((node_->now() - start).seconds() < fc::holdSeconds(3.0)) {
       require(Wall::now() - wall < 30s, "Post-release simulation clock timed out");
       current_box = box_.fresh();
       max_slip = std::max(max_slip, (point(current_box) - point(release_reference)).norm());
@@ -706,6 +709,7 @@ private:
     double seconds = 3.0)
   {
     const auto sim_start = node_->now();const auto wall_start = Wall::now();
+    seconds = fc::holdSeconds(seconds);
     while ((node_->now() - sim_start).seconds() < seconds) {
       require(Wall::now() - wall_start < 30s, "Transfer hold simulation clock timed out");
       carrySafe();

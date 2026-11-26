@@ -77,6 +77,7 @@ public:
     motion_(node, names_, rightProfile(), [this] {safe();}, nullptr)
   {
     fc::setSpeedScale(task_.speed_scale);
+    fc::setVerifyMode(task_.verify);
     if (task_.rigid_grasp) {
       left_weld_ = std::make_unique<fc::BoxWeld>(node_, "left");
       right_weld_ = std::make_unique<fc::BoxWeld>(node_, "right");
@@ -162,7 +163,8 @@ public:
       "Physical box did not follow right-arm lift");
     const auto sim_start = node_->now();const auto wall_start = Wall::now();
     double drift = 0, angle = 0;
-    while ((node_->now() - sim_start).seconds() < 3) {
+    const double pick_hold = fc::holdSeconds(3.0);
+    while ((node_->now() - sim_start).seconds() < pick_hold) {
       require(Wall::now() - wall_start < 30s, "Right hold clock timed out");safe();
       const auto box = box_.fresh();const auto hand = arm().getCurrentPose(tcp()).pose;
       drift = std::max(drift,
@@ -176,8 +178,8 @@ public:
     }
     require(!onTable(), "Box still has fresh table contact after right lift");
     RCLCPP_INFO(node_->get_logger(),
-      "RIGHT PICK TEST PASSED: lift=%.3f mm drift=%.3f mm angle=%.3f deg; right gripper stays closed",
-      rise * 1000, drift * 1000, angle * 180 / M_PI);
+      "RIGHT PICK TEST PASSED: lift=%.3f mm hold=%.1f sim s drift=%.3f mm angle=%.3f deg; right gripper stays closed",
+      rise * 1000, pick_hold, drift * 1000, angle * 180 / M_PI);
     if (stage == "pick") {return;}
     contacts_.setCarrying(true);
     configureContacts(true, false);
@@ -519,7 +521,8 @@ private:
       advance.addSuffixWayPoint(*path[i], 0.0);
     }
     trajectory_processing::TimeOptimalTrajectoryGeneration timing(0.00001, 0.01, 0.000001);
-    if (!timing.computeTimeStamps(advance, fc::speed(0.06), fc::speed(0.06))) {return false;}
+    if (!timing.computeTimeStamps(advance, fc::speed(kShelfTransferScale),
+      fc::speed(kShelfTransferScale))) {return false;}
     advance.getRobotTrajectoryMsg(transfer.advance);
     if (!checkShelfTransfer(transfer.advance, scene, relative, relative_angle,
         limitBefore(0.09), "advance"))
@@ -580,7 +583,8 @@ private:
       return false;
     }
     trajectory_processing::TimeOptimalTrajectoryGeneration timing(0.00001, 0.01, 0.000001);
-    if (!timing.computeTimeStamps(turn, fc::speed(0.06), fc::speed(0.06))) {return false;}
+    if (!timing.computeTimeStamps(turn, fc::speed(kShelfTransferScale),
+      fc::speed(kShelfTransferScale))) {return false;}
     turn.getRobotTrajectoryMsg(motion);
     if (!checkShelfTransfer(motion, scene, relative, relative_angle, limitBefore(0.24),
         "timed-turn"))
@@ -610,9 +614,9 @@ private:
         box_.tilt(box) < 0.00873;
       if (!good) {since = -1;} else if (since < 0) {
         since = now;
-      } else if (now - since >= 1000000000) {
-        RCLCPP_INFO(node_->get_logger(), "SHELF SUPPORT VERIFIED: 1 sim s bottom_gap=%.3f mm",
-          (box_.bottom(box) - cell_.surface) * 1000);return;
+      } else if (now - since >= fc::holdNanoseconds(1.0)) {
+        RCLCPP_INFO(node_->get_logger(), "SHELF SUPPORT VERIFIED: %.1f sim s bottom_gap=%.3f mm",
+          fc::holdSeconds(1.0), (box_.bottom(box) - cell_.surface) * 1000);return;
       }
       std::this_thread::sleep_for(100ms);
     }
@@ -666,7 +670,8 @@ private:
     Eigen::Quaterniond relative_angle = rotation(hand).inverse() * rotation(box);
     arm().setGoalJointTolerance(0.00005);
     arm().setGoalPositionTolerance(0.00015);arm().setGoalOrientationTolerance(0.0005);
-    arm().setMaxVelocityScalingFactor(fc::speed(0.06));arm().setMaxAccelerationScalingFactor(fc::speed(0.06));
+    arm().setMaxVelocityScalingFactor(fc::speed(kShelfTransferScale));
+    arm().setMaxAccelerationScalingFactor(fc::speed(kShelfTransferScale));
     arm().setPlanningTime(2.0);
     ShelfTransfer transfer;
     Eigen::Quaterniond aligned = chooseShelfApproach(relative, relative_angle, transfer);
@@ -709,7 +714,7 @@ private:
     Eigen::Vector3d target = insertCenter() - aligned * relative;
     goal.position.x = target.x();goal.position.y = target.y();goal.position.z = target.z();
     RCLCPP_INFO(node_->get_logger(), "SHELF INSERT START: 120 mm into second shelf");
-    motion_.linear(goal, 0.03, LinearMode::normal, kExecJointMargin);
+    motion_.linear(goal, 0.06, LinearMode::normal, kExecJointMargin);  // insert, 6 % (was 3 %)
     motion_.waitAt(&goal, 0.0003, 0.0015);
     box = box_.fresh();hand = arm().getCurrentPose(tcp()).pose;syncHeldBox(box, hand);
     // Test mode: seating needs box-shelf contacts, which Gazebo hides while the box is welded.
@@ -719,7 +724,7 @@ private:
     goal.position.y = hand.position.y + cell_.center.y() - box.position.y;
     goal.position.z = hand.position.z + descent_z - box.position.z;
     RCLCPP_INFO(node_->get_logger(), "SHELF DESCENT START: center z=%.4f", descent_z);
-    motion_.linear(goal, 0.02, LinearMode::shelf_descent, kExecJointMargin);
+    motion_.linear(goal, 0.05, LinearMode::shelf_descent, kExecJointMargin);  // 5 % (was 2 %)
     motion_.waitAt(&goal, 0.0003, 0.0015);
     contacts_.setSeating(true);
     configureContacts(true, false, true);
@@ -774,7 +779,7 @@ private:
     release_slip = std::max(release_slip, (point(box) - point(release_reference)).norm());
     addBox(box);goal = arm().getCurrentPose(tcp()).pose;goal.position.z += 0.08;
     RCLCPP_INFO(node_->get_logger(), "SHELF RETREAT CLEARANCE: raise 80 mm with open gripper");
-    motion_.linear(goal, 0.02, LinearMode::normal, kExecJointMargin);
+    motion_.linear(goal, 0.05, LinearMode::normal, kExecJointMargin);  // open-hand lift, 5 %
     motion_.waitAt(&goal, 0.001, 0.005);
     require(onShelf(), "Box lost shelf support during clearance lift");
     goal = arm().getCurrentPose(tcp()).pose;goal.position.y -= inward_ * 0.12;
@@ -786,7 +791,7 @@ private:
         return std::hypot(b.position.x - cell_.center.x(), b.position.y - cell_.center.y());
       };
     const auto sim_start = node_->now();const auto wall_start = Wall::now();
-    while ((node_->now() - sim_start).seconds() < 3.0) {
+    while ((node_->now() - sim_start).seconds() < fc::holdSeconds(3.0)) {
       require(Wall::now() - wall_start < 30s, "Shelf post-release clock timed out");
       box = box_.fresh();safe();
       release_slip = std::max(release_slip, (point(box) - point(release_reference)).norm());
@@ -807,6 +812,7 @@ private:
     double seconds = 3.0)
   {
     const auto sim_start = node_->now();const auto wall_start = Wall::now();
+    seconds = fc::holdSeconds(seconds);
     while ((node_->now() - sim_start).seconds() < seconds) {
       require(Wall::now() - wall_start < 30s, "Right carry hold clock timed out");safe();
       const auto box = box_.fresh();const auto hand = arm().getCurrentPose(tcp()).pose;
@@ -844,7 +850,7 @@ private:
       safe();const auto box = box_.fresh();const auto now = node_->now().nanoseconds();
       if (!onTable() || std::abs(box.position.z - rest_z) > 0.001) {since = -1;} else if (since < 0) {
         since = now;
-      } else if (now - since > 500000000) {return;}
+      } else if (now - since > fc::holdNanoseconds(0.5)) {return;}
       std::this_thread::sleep_for(100ms);
     }
     throw std::runtime_error("Table support not verified before right pickup");
@@ -1010,6 +1016,8 @@ private:
   // require the larger kPlanJointMargin, so the measured start state (a few mrad away from the
   // planned one) cannot push an accepted candidate below the execution margin.
   static constexpr double kExecJointMargin = 0.05;
+  // Shelf turn and advance speed scale: 10 % (was 6 %); the box is monitored at 100 Hz.
+  static constexpr double kShelfTransferScale = 0.10;
   static constexpr double kPlanJointMargin = 0.07;
   Group::Plan planPickupApproach(const Pose & pre, const Pose & pick)
   {

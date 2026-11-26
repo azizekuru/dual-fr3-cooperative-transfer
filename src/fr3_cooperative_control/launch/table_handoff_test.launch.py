@@ -102,6 +102,8 @@ def generate_launch_description():
                               description='Run both arm tasks in one transfer_task process'),
         DeclareLaunchArgument('speed_scale', default_value='1.0',
                               description='Test mode: multiply every motion speed (capped at 1)'),
+        DeclareLaunchArgument('verify', default_value='full', choices=['full', 'fast'],
+                              description='fast: shorter hold/observation windows (x0.2)'),
         DeclareLaunchArgument('rigid_grasp', default_value='false', choices=['true', 'false'],
                               description='Test mode: weld the box to the hand while grasped'),
         OpaqueFunction(function=setup),
@@ -131,6 +133,7 @@ def setup(context):
         'cell_inset': CELL_INSET, 'box_size': BOX_SIZE, 'gazebo_z_offset': GAZEBO_Z_OFFSET,
         'speed_scale': float(LaunchConfiguration('speed_scale').perform(context)),
         'rigid_grasp': LaunchConfiguration('rigid_grasp').perform(context) == 'true',
+        'verify': LaunchConfiguration('verify').perform(context),
     }
     single_process = LaunchConfiguration('single_process').perform(context) == 'true'
     start = (shelf_cell(robot, task['source_shelf'], task['source_level'], source_dx)

@@ -83,7 +83,7 @@ ament_target_dependencies(reachability_map ${CORE_DEPENDENCIES} moveit_ros_plann
 install(TARGETS dual_arm_coordinator dual_arm_reach_test single_arm_pick_test right_arm_table_pick transfer_task reachability_map
   DESTINATION lib/${PROJECT_NAME})
 
-install(PROGRAMS scripts/gripper_alignment_check.py
+install(PROGRAMS scripts/gripper_alignment_check.py scripts/batch_transfer_test.py
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch

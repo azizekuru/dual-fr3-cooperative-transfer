@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 
@@ -38,6 +39,23 @@ inline double & speedScaleStorage()
 }
 inline void setSpeedScale(double value) {speedScaleStorage() = value > 0 ? value : 1.0;}
 inline double speed(double scale) {return std::min(1.0, scale * speedScaleStorage());}
+
+// Verification mode (launch argument verify, default "full"). "fast" shortens every hold,
+// support and post-release observation window (no check is removed): x0.2, at least 0.3 s.
+inline bool & verifyFastStorage()
+{
+  static bool value = false;
+  return value;
+}
+inline void setVerifyMode(const std::string & mode) {verifyFastStorage() = mode == "fast";}
+inline double holdSeconds(double seconds)
+{
+  return verifyFastStorage() ? std::max(0.3, 0.2 * seconds) : seconds;
+}
+inline int64_t holdNanoseconds(double seconds)
+{
+  return static_cast<int64_t>(holdSeconds(seconds) * 1e9);
+}
 
 // Nearest of the 24 axis-aligned cube orientations (a cube may rest on any face).
 inline Eigen::Quaterniond nearestCubeRotation(const Eigen::Quaterniond & current)

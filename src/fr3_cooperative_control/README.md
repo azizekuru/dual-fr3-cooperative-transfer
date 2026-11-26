@@ -117,6 +117,7 @@ Ek launch argümanları (varsayılanlar bugünkü davranışı verir):
 |---|---|---|
 | `source_slot`, `target_slot` | `center` | Kutunun raftaki yeri (`left` / `center` / `right`, masadan rafa bakınca). Sol/sağ: kat merkezinden ±0.10 m |
 | `single_process` | `false` | `true`: iki kol görevi tek `transfer_task` sürecinde çalışır |
+| `verify` | `full` | `fast`: tutma, destek ve bırakma sonrası izleme süreleri ×0.2 (en az 0.3 s); kontroller aynı kalır |
 | `speed_scale` | `1.0` | Test modu: tüm hareket hızlarını çarpar (en fazla 1.0'a kadar) |
 | `rigid_grasp` | `false` | Test modu: kavramada kutu ele kaynaklanır, bırakmadan önce çözülür (Gazebo DetachableJoint) |
 
@@ -133,3 +134,17 @@ Sol kol kavramayı hareketten önce prova ederek seçer (`PICK GRASP SELECTED`):
 
 Not: `source_level`/`target_level` şimdilik yalnızca 2. kat için doğrulanmıştır. Diğer katlar için
 kavrama ve yaklaşma adaylarının seçimi (geçiş planı 4–6. adımlar) henüz yapılmadı.
+
+## Toplu test (`batch_transfer_test.py`)
+
+Birçok görevi arka arkaya, hiçbir zaman üst üste binmeden çalıştırır; her koşunun sonucunu, süresini ve
+konum hatalarını `~/fr3_batch/<tarih>/results.csv` dosyasına yazar ve sonunda bir özet verir.
+
+```bash
+ros2 run fr3_cooperative_control batch_transfer_test.py --dry-run --random 10   # sadece listeler
+ros2 run fr3_cooperative_control batch_transfer_test.py --random 10             # 10 rastgele görev
+ros2 run fr3_cooperative_control batch_transfer_test.py --all --levels 2 3      # 36 kombinasyon
+ros2 run fr3_cooperative_control batch_transfer_test.py --random 5 --extra rigid_grasp:=true speed_scale:=2.0
+```
+
+Başka bir Gazebo/launch süreci çalışıyorsa başlamaz. Varsayılan headless'tır (`--gui` ile pencere açılır).
