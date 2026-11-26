@@ -87,3 +87,27 @@ ros2 run fr3_cooperative_control dual_arm_reach_test --ros-args -p use_sim_time:
 - `src/dual_arm_reach_test.cpp`: Aşama 1 testi (kutu yok, gripper yok)
 - `src/dual_arm_coordinator.cpp`: ilk sürüm (değiştirilmedi)
 - `launch/reach_test.launch.py`: Gazebo + move_group + test tek komutla
+
+## Kod yapısı (masa aktarmalı tam görev)
+
+Görev düğümleri yalnızca görev mantığını içerir; ortak işler `fr3_cooperative_core` kütüphanesindedir.
+
+| Dosya | Görev |
+|---|---|
+| `src/single_arm_pick_test.cpp` | Sol kol: kaynak raf hücresinden alma, masaya taşıma ve koyma |
+| `src/right_arm_table_pick.cpp` | Sağ kol: sol kolu park etme, masadan alma, hedef raf hücresine koyma |
+| `include/.../world_model.hpp` | Masa, raf, kat ve direk geometrisi robot modelinden okunur; görev hücreleri buradan hesaplanır |
+| `include/.../arm_motion.hpp` | Düz/hassas Kartezyen yol, TOTG zamanlama, bekleme, planla-yürüt, planlama sahnesi araçları |
+| `include/.../box_tracker.hpp` | Gazebo'dan kutu konumu (taze/sabit ölçüm, eğiklik, taban yüksekliği) |
+| `include/.../contact_monitor.hpp` | Temas sensörleri: parmak teması, destek teması, beklenmeyen temaslar |
+| `include/.../gripper.hpp` | Gripper komutu ve ölçülen parmak açıklığı |
+
+Kodda sabit koordinat yoktur. Görev hücreleri launch argümanlarıyla seçilir (varsayılan: 2. kat → masa → 2. kat):
+
+```bash
+ros2 launch fr3_cooperative_control table_handoff_test.launch.py right_stage:=shelf_place \
+  source_level:=2 target_level:=2
+```
+
+Not: `source_level`/`target_level` şimdilik yalnızca 2. kat için doğrulanmıştır. Diğer katlar için
+kavrama ve yaklaşma adaylarının seçimi (geçiş planı 4–6. adımlar) henüz yapılmadı.

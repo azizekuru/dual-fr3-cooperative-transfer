@@ -13,6 +13,58 @@ from launch.substitutions import EnvironmentVariable, LaunchConfiguration, Pytho
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 
+# Task geometry shared with the C++ nodes (see include/fr3_cooperative_control/world_model.hpp).
+# Shelf, board and table positions come from the robot description, never from constants here.
+BOX_SIZE = 0.04
+GAZEBO_Z_OFFSET = 0.05  # Gazebo world z minus MoveIt world z
+SPAWN_DROP = 0.001      # spawn the box 1 mm above its support
+CELL_INSET = 0.03       # box centre behind the board's front edge
+HANDOFF_XY = (0.0, 0.05)
+LEVELS = ['1', '2', '3', '4']
+
+
+def _xyz(element):
+    text = element.get('xyz', '0 0 0') if element is not None else '0 0 0'
+    return [float(v) for v in text.split()]
+
+
+def _link_boxes(robot, link_name):
+    """World-aligned (centre, size) of every box collision of a fixed environment link."""
+    link = robot.find(f"./link[@name='{link_name}']")
+    joint = robot.find(f"./joint/child[@link='{link_name}']/..")
+    if link is None or joint is None:
+        raise RuntimeError(f'{link_name} not found in robot description')
+    base = _xyz(joint.find('origin'))
+    boxes = []
+    for collision in link.findall('collision'):
+        box = collision.find('geometry/box')
+        if box is not None:
+            offset = _xyz(collision.find('origin'))
+            size = [float(v) for v in box.get('size').split()]
+            boxes.append(([b + o for b, o in zip(base, offset)], size))
+    if not boxes:
+        raise RuntimeError(f'No box collision on {link_name}')
+    return boxes
+
+
+def shelf_cell(robot, shelf, level):
+    """Resting box centre in a shelf cell (MoveIt world frame); boards ordered bottom-up."""
+    boards = sorted((b for b in _link_boxes(robot, f'{shelf}_link')
+                     if b[1][2] < 0.05 and b[1][0] > 0.2 and b[1][1] > 0.2),
+                    key=lambda b: b[0][2])
+    if not 1 <= int(level) <= len(boards):
+        raise RuntimeError(f'{shelf} has no board level {level}')
+    center, size = boards[int(level) - 1]
+    inward = 1.0 if center[1] >= 0 else -1.0
+    front = center[1] - inward * size[1] / 2
+    return (center[0], front + inward * CELL_INSET, center[2] + size[2] / 2 + BOX_SIZE / 2)
+
+
+def handoff_cell(robot):
+    """Resting box centre at the table hand-off point (MoveIt world frame)."""
+    center, size = max(_link_boxes(robot, 'table_link'), key=lambda b: b[1][0] * b[1][1])
+    return (HANDOFF_XY[0], HANDOFF_XY[1], center[2] + size[2] / 2 + BOX_SIZE / 2)
+
 
 def generate_launch_description():
     return LaunchDescription([
@@ -23,6 +75,10 @@ def generate_launch_description():
                               choices=['true', 'false']),
         DeclareLaunchArgument('shelf2_y', default_value='1.25',
                               choices=['1.15', '1.20', '1.25']),
+        DeclareLaunchArgument('source_level', default_value='2', choices=LEVELS,
+                              description='shelf_1 board the box starts on (1 = lowest)'),
+        DeclareLaunchArgument('target_level', default_value='2', choices=LEVELS,
+                              description='shelf_2 board the box is placed on (1 = lowest)'),
         OpaqueFunction(function=setup),
     ])
 
@@ -33,8 +89,8 @@ def setup(context):
     moveit = MoveItConfigsBuilder(
         'fr3_duo_gazebo', package_name='dual_fr3_moveit_config').to_moveit_configs()
     moveit.sensors_3d.clear()
+    robot = ET.fromstring(moveit.robot_description['robot_description'])
     if shelf_y != '1.20':
-        robot = ET.fromstring(moveit.robot_description['robot_description'])
         rack_origin = robot.find("./joint[@name='shelf_2_joint']/origin")
         rack_origin.set('xyz', f'0.0 {shelf_y} 0.0')
         moveit.robot_description['robot_description'] = ET.tostring(robot, encoding='unicode')
@@ -52,15 +108,26 @@ def setup(context):
     left_placed = table_only.perform(context) == 'false'
     if right_stage.perform(context) == 'left_park' and not left_placed:
         raise RuntimeError('left_park requires the left placement stage')
-    spawn_y = PythonExpression(["'0.05' if '", table_only, "' == 'true' else '-1.04'"])
-    spawn_z = PythonExpression(["'0.471' if '", table_only, "' == 'true' else '0.5335'"])
+    task = {
+        'source_shelf': 'shelf_1',
+        'source_level': int(LaunchConfiguration('source_level').perform(context)),
+        'target_shelf': 'shelf_2',
+        'target_level': int(LaunchConfiguration('target_level').perform(context)),
+        'handoff_x': HANDOFF_XY[0], 'handoff_y': HANDOFF_XY[1],
+        'cell_inset': CELL_INSET, 'box_size': BOX_SIZE, 'gazebo_z_offset': GAZEBO_Z_OFFSET,
+    }
+    start = (shelf_cell(robot, task['source_shelf'], task['source_level']) if left_placed
+             else handoff_cell(robot))
+    spawn = [f'{start[0]:.4f}', f'{start[1]:.4f}',
+             f'{start[2] + GAZEBO_Z_OFFSET + SPAWN_DROP:.4f}']
     left_task = Node(package='fr3_cooperative_control', executable='single_arm_pick_test',
                      name='single_arm_pick_test', output='screen',
                      condition=UnlessCondition(table_only),
-                     parameters=parameters + [{'stage': 'place'}])
+                     parameters=parameters + [task, {'stage': 'place'}])
     right_task = Node(package='fr3_cooperative_control', executable='right_arm_table_pick',
                       name='right_arm_table_pick', output='screen',
-                      parameters=parameters + [{'stage': right_stage, 'left_placed': left_placed}])
+                      parameters=parameters + [task, {'stage': right_stage,
+                                                      'left_placed': left_placed}])
 
     def after_left(event, context):
         if event.returncode == 0:
@@ -123,7 +190,7 @@ def setup(context):
              output='screen', arguments=[
                  '-world', 'empty', '-name', 'target_box', '-allow_renaming', 'false',
                  '-file', os.path.join(bringup, 'models', 'target_box', 'model.sdf'),
-                 '-x', '0', '-y', spawn_y, '-z', spawn_z]),
+                 '-x', spawn[0], '-y', spawn[1], '-z', spawn[2]]),
         Node(package='ros_gz_bridge', executable='parameter_bridge', output='screen',
              arguments=[
                  '/model/target_box/pose@geometry_msgs/msg/PoseStamped[gz.msgs.Pose',
