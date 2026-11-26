@@ -110,22 +110,29 @@ double WorldModel::boxHalfDiagonal() const {return boxHalf() * std::sqrt(2.0);}
 
 Cell WorldModel::shelfCell(const std::string & name, int level) const
 {
+  return shelfCell(name, level, 0.0, task_.cell_inset);
+}
+
+Cell WorldModel::shelfCell(const std::string & name, int level, double dx, double inset) const
+{
   const Shelf & s = shelf(name);
   const WorldBox & board = s.board(level);
   Cell cell;
   cell.surface = board.top();
   cell.center = Eigen::Vector3d(
-    board.center.x(), s.frontY() + s.inward() * task_.cell_inset, cell.surface + boxHalf());
+    board.center.x() + dx, s.frontY() + s.inward() * inset, cell.surface + boxHalf());
   return cell;
 }
 
-Cell WorldModel::handoffCell() const
+Cell WorldModel::tableCell(double x, double y) const
 {
   Cell cell;
   cell.surface = table_.top();
-  cell.center = Eigen::Vector3d(task_.handoff_x, task_.handoff_y, cell.surface + boxHalf());
+  cell.center = Eigen::Vector3d(x, y, cell.surface + boxHalf());
   return cell;
 }
+
+Cell WorldModel::handoffCell() const {return tableCell(task_.handoff_x, task_.handoff_y);}
 
 bool WorldModel::overTable(const Eigen::Vector3d & p, double margin) const
 {

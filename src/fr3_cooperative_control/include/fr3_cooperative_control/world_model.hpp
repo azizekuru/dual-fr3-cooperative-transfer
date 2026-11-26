@@ -78,6 +78,9 @@ public:
   double boxHalfDiagonal() const;
 
   Cell shelfCell(const std::string & shelf, int level) const;
+  // Cell `dx` metres sideways from the board centre and `inset` metres behind the front edge.
+  Cell shelfCell(const std::string & shelf, int level, double dx, double inset) const;
+  Cell tableCell(double x, double y) const;
   Cell sourceCell() const {return shelfCell(task_.source_shelf, task_.source_level);}
   Cell targetCell() const {return shelfCell(task_.target_shelf, task_.target_level);}
   Cell handoffCell() const;

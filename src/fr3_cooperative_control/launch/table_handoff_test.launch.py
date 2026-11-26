@@ -1,6 +1,6 @@
 """Table handoff: validated left placement followed by physical right pickup."""
 import os
-import xml.etree.ElementTree as ET
+import sys
 
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
@@ -11,7 +11,9 @@ from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
-from moveit_configs_utils import MoveItConfigsBuilder
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from fr3_moveit_params import moveit_setup  # noqa: E402  (shared helper next to this file)
 
 # Task geometry shared with the C++ nodes (see include/fr3_cooperative_control/world_model.hpp).
 # Shelf, board and table positions come from the robot description, never from constants here.
@@ -92,23 +94,7 @@ def generate_launch_description():
 def setup(context):
     shelf_y = LaunchConfiguration('shelf2_y').perform(context)
     bringup = get_package_share_directory('franka_gazebo_bringup')
-    moveit = MoveItConfigsBuilder(
-        'fr3_duo_gazebo', package_name='dual_fr3_moveit_config').to_moveit_configs()
-    moveit.sensors_3d.clear()
-    robot = ET.fromstring(moveit.robot_description['robot_description'])
-    if shelf_y != '1.20':
-        rack_origin = robot.find("./joint[@name='shelf_2_joint']/origin")
-        rack_origin.set('xyz', f'0.0 {shelf_y} 0.0')
-        moveit.robot_description['robot_description'] = ET.tostring(robot, encoding='unicode')
-    # Keep this test away from joint5's physical stops; share server/client bounds.
-    limits = moveit.joint_limits['robot_description_planning']['joint_limits']
-    limits['left_fr3v2_joint5'].update(
-        has_position_limits=True, min_position=-2.60, max_position=2.60)
-    limits['right_fr3v2_joint5'].update(
-        has_position_limits=True, min_position=-2.60, max_position=2.60)
-    parameters = [moveit.robot_description, moveit.robot_description_semantic,
-                  moveit.robot_description_kinematics, moveit.joint_limits,
-                  {'use_sim_time': True}]
+    moveit, robot, parameters = moveit_setup(shelf_y)
     table_only = LaunchConfiguration('table_only')
     right_stage = LaunchConfiguration('right_stage')
     left_placed = table_only.perform(context) == 'false'

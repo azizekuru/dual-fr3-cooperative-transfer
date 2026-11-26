@@ -21,6 +21,7 @@ find_package(shape_msgs REQUIRED)
 find_package(ros_gz_interfaces REQUIRED)
 find_package(geometric_shapes REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(moveit_ros_planning REQUIRED)
 
 # --- Mevcut koordinator (degistirilmedi) ---
 add_executable(dual_arm_coordinator src/dual_arm_coordinator.cpp)
@@ -74,7 +75,12 @@ foreach(task_node single_arm_pick_test right_arm_table_pick transfer_task)
   ament_target_dependencies(${task_node} ${CORE_DEPENDENCIES})
 endforeach()
 
-install(TARGETS dual_arm_coordinator dual_arm_reach_test single_arm_pick_test right_arm_table_pick transfer_task
+# Offline tools (robot model only; no Gazebo/move_group)
+add_executable(reachability_map src/tools/reachability_map.cpp)
+target_link_libraries(reachability_map fr3_cooperative_core)
+ament_target_dependencies(reachability_map ${CORE_DEPENDENCIES} moveit_ros_planning)
+
+install(TARGETS dual_arm_coordinator dual_arm_reach_test single_arm_pick_test right_arm_table_pick transfer_task reachability_map
   DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS scripts/gripper_alignment_check.py

@@ -3,3 +3,4 @@ install/
 log/
 *.tar.gz
 .vscode/
+__pycache__/
