@@ -729,7 +729,24 @@ private:
       (point(box) - point(before_relax)).norm() * 1000, (box_.bottom(box) - cell_.surface) * 1000);
     require((point(box) - point(before_relax)).norm() < 0.003 &&
       box_.bottom(box) - cell_.surface > -0.0003, "Excessive shelf seating displacement");
-    syncHeldBox(box, hand);bool seated = false;
+    syncHeldBox(box, hand);
+    // As on the left arm: relaxing the grip can let the box slide up to ~1.8 mm; re-centre the
+    // still-held box over the target (2 mm above the board) before seating.
+    for (int attempt = 1; attempt <= 2; ++attempt) {
+      const double ex = cell_.center.x() - box.position.x;
+      const double ey = cell_.center.y() - box.position.y;
+      if (std::hypot(ex, ey) < 0.0003) {break;}
+      RCLCPP_INFO(node_->get_logger(), "SHELF XY CORRECTION %d/2: error=%.3f mm (x=%.3f y=%.3f)",
+        attempt, std::hypot(ex, ey) * 1000, ex * 1000, ey * 1000);
+      goal = arm().getCurrentPose(tcp()).pose;
+      goal.orientation.w = aligned.w();goal.orientation.x = aligned.x();
+      goal.orientation.y = aligned.y();goal.orientation.z = aligned.z();
+      goal.position.x += ex;goal.position.y += ey;
+      motion_.linear(goal, 0.01, LinearMode::normal, kExecJointMargin);
+      motion_.waitAt(&goal, 0.00015, 0.0015);
+      box = box_.stable();hand = arm().getCurrentPose(tcp()).pose;syncHeldBox(box, hand);
+    }
+    bool seated = false;
     for (int step = 0; step < 10; ++step) {
       box = box_.fresh();const double gap = box_.bottom(box) - cell_.surface;
       RCLCPP_INFO(node_->get_logger(), "SHELF SEAT step=%d gap=%.3f mm contact=%d", step,

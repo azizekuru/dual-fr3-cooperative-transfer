@@ -7,7 +7,8 @@
       <publish_link_pose>false</publish_link_pose>
       <publish_nested_model_pose>false</publish_nested_model_pose>
       <use_pose_vector_msg>false</use_pose_vector_msg>
-      <update_frequency>30</update_frequency>
+      <!-- 100 Hz: at 30 Hz the pose lags the moving hand by up to 33 ms (false "slip"). -->
+      <update_frequency>100</update_frequency>
     </plugin>
     <link name="link">
       <inertial>

@@ -8,6 +8,7 @@
 #include <future>
 #include <limits>
 #include <memory>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -475,6 +476,23 @@ private:
       box_.bottom(current_box) - surface > -0.0003,
       "Box moved excessively while reducing overclosure");
     syncHeldBox(current_box, current_tcp);
+    // Relaxing the grip lets the box slide up to ~1.8 mm on the finger pads (the change of the
+    // grip command). The box is still held 2 mm above the table: move the hand horizontally so
+    // the box is over the target again before seating.
+    for (int attempt = 1; attempt <= 2; ++attempt) {
+      const double ex = handoff.center.x() - current_box.position.x;
+      const double ey = handoff.center.y() - current_box.position.y;
+      if (std::hypot(ex, ey) < 0.0003) {break;}
+      RCLCPP_INFO(node_->get_logger(), "SEAT XY CORRECTION %d/2: error=%.3f mm (x=%.3f y=%.3f)",
+        attempt, std::hypot(ex, ey) * 1000, ex * 1000, ey * 1000);
+      goal = arm().getCurrentPose(tcp()).pose;
+      goal.orientation.w = aligned.w();goal.orientation.x = aligned.x();
+      goal.orientation.y = aligned.y();goal.orientation.z = aligned.z();
+      goal.position.x += ex;goal.position.y += ey;
+      motion_.linear(goal, 0.01);motion_.waitAt(&goal, 0.00015, 0.0015);
+      current_box = box_.stable();current_tcp = arm().getCurrentPose(tcp()).pose;
+      syncHeldBox(current_box, current_tcp);
+    }
     allowFingers(true);  // Only box-table support; robot-table collisions remain checked.
     bool seated = false;int nudges = 0;
     for (int step = 0; step < 10; ++step) {
@@ -585,6 +603,8 @@ private:
     const Eigen::Vector3d in = world_->sourceShelf().inward() * Eigen::Vector3d::UnitY();
     const Eigen::Vector3d down = -Eigen::Vector3d::UnitZ();
     const auto valid = motion_.collisionCheck(scene, kPlanMargin);
+    std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<double> perturb(-0.3, 0.3);
     for (const double retreat : {0.12, 0.08}) {
       for (const double pitch : {0.0, 20.0, 35.0}) {
         const double a = pitch * M_PI / 180.0;
@@ -601,7 +621,17 @@ private:
         pre.linear() = q.toRotationMatrix();pre.translation() = point(c.pre);
         for (int attempt = 0; attempt < 12; ++attempt) {
           auto state = scene.getCurrentState();
-          if (attempt > 0) {state.setToRandomPositions(group);}
+          // Seeds: the current posture, then postures near it (+-0.3 rad), random ones last;
+          // a far random posture means a long swing to the pre-grasp point.
+          if (attempt > 0 && attempt <= 6) {
+            std::vector<double> near;
+            scene.getCurrentState().copyJointGroupPositions(group, near);
+            for (auto & value : near) {value += perturb(rng);}
+            state.setJointGroupPositions(group, near);
+            state.enforceBounds(group);
+          } else if (attempt > 6) {
+            state.setToRandomPositions(group);
+          }
           if (!state.setFromIK(group, pre, tcp(), 0.08, valid)) {continue;}
           stage = "approach";
           std::vector<moveit::core::RobotStatePtr> approach;
@@ -657,7 +687,14 @@ private:
     std::vector<moveit::core::RobotStatePtr> path;
     const double fraction = moveit::core::CartesianInterpolator::computeCartesianPath(
       &start, group, path, tcp_link, waypoints, true, moveit::core::MaxEEFStep(0.002),
-      moveit::core::CartesianPrecision{}, motion_.collisionCheck(*held, margin),
+      moveit::core::CartesianPrecision{},
+      // Full-state check: includes the attached box (its TCP link is not in the arm group).
+      [&held, margin](moveit::core::RobotState * s, const moveit::core::JointModelGroup * joints,
+      const double * values) {
+        s->setJointGroupPositions(joints, values);s->update();
+        return s->satisfiesBounds(joints) &&
+               fc::ArmMotion::jointLimitMargin(*s, joints) >= margin && !held->isStateColliding(*s);
+      },
       kinematics::KinematicsQueryOptions());
     return fraction >= 0.999 && !path.empty();
   }
