@@ -92,6 +92,11 @@ public:
 
   static double jointLimitMargin(
     const moveit::core::RobotState & state, const moveit::core::JointModelGroup * group);
+  // Largest joint change between consecutive waypoints. A Cartesian interpolation whose IK
+  // switches configuration to avoid a collision still "completes", but with a jump.
+  static double maxJointJump(
+    const std::vector<moveit::core::RobotStatePtr> & path,
+    const moveit::core::JointModelGroup * group);
 
 private:
   void finePath(const Pose & target, robot_trajectory::RobotTrajectory & trajectory,

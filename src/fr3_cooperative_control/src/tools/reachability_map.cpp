@@ -217,7 +217,10 @@ public:
         const double fraction = moveit::core::CartesianInterpolator::computeCartesianPath(
           &state, group, path, tcp, waypoints, true, moveit::core::MaxEEFStep(0.002),
           moveit::core::CartesianPrecision{}, exec_valid, kinematics::KinematicsQueryOptions());
-        if (fraction < 0.999 || path.empty()) {continue;}
+        // 2 mm steps: a larger joint change means the IK switched configuration mid-path.
+        if (fraction < 0.999 || path.empty() || fc::ArmMotion::maxJointJump(path, group) > 0.05) {
+          continue;
+        }
         double margin = std::numeric_limits<double>::infinity();
         for (const auto & p : path) {margin = std::min(margin, fc::ArmMotion::jointLimitMargin(*p, group));}
         r.exit_d = c.inward == 0 ? 0.08 : d;r.exit_margin = std::max(r.exit_margin, margin);

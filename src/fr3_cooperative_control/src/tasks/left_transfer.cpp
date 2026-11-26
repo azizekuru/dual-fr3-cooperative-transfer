@@ -605,7 +605,7 @@ private:
     const auto valid = motion_.collisionCheck(scene, kPlanMargin);
     std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<double> perturb(-0.3, 0.3);
-    for (const double retreat : {0.12, 0.08}) {
+    for (const double retreat : {0.12, 0.08, 0.06}) {
       for (const double pitch : {0.0, 20.0, 35.0}) {
         const double a = pitch * M_PI / 180.0;
         const Eigen::Quaterniond q = fc::handFrame(
@@ -696,7 +696,8 @@ private:
                fc::ArmMotion::jointLimitMargin(*s, joints) >= margin && !held->isStateColliding(*s);
       },
       kinematics::KinematicsQueryOptions());
-    return fraction >= 0.999 && !path.empty();
+    // 2 mm steps: a joint change above 0.05 rad means the IK switched configuration.
+    return fraction >= 0.999 && !path.empty() && fc::ArmMotion::maxJointJump(path, group) <= 0.05;
   }
 
   void holdTransferred(

@@ -45,6 +45,20 @@ double ArmMotion::jointLimitMargin(
   return margin;
 }
 
+double ArmMotion::maxJointJump(
+  const std::vector<moveit::core::RobotStatePtr> & path,
+  const moveit::core::JointModelGroup * group)
+{
+  double jump = 0.0;
+  for (size_t i = 1; i < path.size(); ++i) {
+    for (const auto & name : group->getVariableNames()) {
+      jump = std::max(jump,
+        std::abs(path[i]->getVariablePosition(name) - path[i - 1]->getVariablePosition(name)));
+    }
+  }
+  return jump;
+}
+
 moveit_msgs::msg::PlanningScene ArmMotion::sceneSnapshot()
 {
   auto client = node_->create_client<moveit_msgs::srv::GetPlanningScene>("/get_planning_scene");
