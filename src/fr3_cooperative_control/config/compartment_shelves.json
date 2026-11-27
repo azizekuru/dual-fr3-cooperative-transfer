@@ -1,0 +1,22 @@
+{
+  "description": "Prototype; metres in MoveIt world; rows top-to-bottom, columns in world -X to +X",
+  "width": 0.60,
+  "depth": 0.38,
+  "side_thickness": 0.025,
+  "side_style": "open_posts",
+  "divider_thickness": 0.020,
+  "divider_style": "open_posts",
+  "board_thickness": 0.025,
+  "floor_bottoms": [0.28, 0.46, 0.64, 0.82],
+  "roof_bottom": 1.00,
+  "object_front_inset": 0.030,
+  "cube_side": 0.040,
+  "probe_bottom_gap": 0.002,
+  "lift": 0.040,
+  "withdraw": 0.080,
+  "initially_occupied_shelves": [1],
+  "shelves": [
+    {"id": 1, "y": -1.20, "approach_sign": 1},
+    {"id": 2, "y": 1.25, "approach_sign": -1}
+  ]
+}

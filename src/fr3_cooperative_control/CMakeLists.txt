@@ -11,6 +11,7 @@ find_package(rclcpp REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(moveit_core REQUIRED)
+find_package(moveit_ros_planning REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
@@ -51,6 +52,7 @@ ament_target_dependencies(
 
 add_executable(single_arm_pick_test src/single_arm_pick_test.cpp)
 target_compile_features(single_arm_pick_test PUBLIC cxx_std_17)
+target_include_directories(single_arm_pick_test PRIVATE include)
 ament_target_dependencies(single_arm_pick_test
   rclcpp rclcpp_action control_msgs controller_manager_msgs sensor_msgs shape_msgs ros_gz_interfaces
   moveit_ros_planning_interface moveit_core moveit_msgs geometry_msgs)
@@ -61,7 +63,13 @@ ament_target_dependencies(right_arm_table_pick
   rclcpp rclcpp_action control_msgs controller_manager_msgs sensor_msgs shape_msgs ros_gz_interfaces
   moveit_ros_planning_interface moveit_core moveit_msgs geometry_msgs)
 
+add_executable(compartment_reach_check src/compartment_reach_check.cpp)
+target_compile_features(compartment_reach_check PUBLIC cxx_std_17)
+ament_target_dependencies(compartment_reach_check
+  rclcpp moveit_ros_planning moveit_core moveit_msgs geometry_msgs shape_msgs)
+
 install(TARGETS dual_arm_coordinator dual_arm_reach_test single_arm_pick_test right_arm_table_pick
+  compartment_reach_check
   DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS scripts/gripper_alignment_check.py
@@ -69,8 +77,15 @@ install(PROGRAMS scripts/gripper_alignment_check.py
 
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY config
+  DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
+  enable_testing()
+  add_executable(simulation_hold_clock_test test/simulation_hold_clock_test.cpp)
+  target_compile_features(simulation_hold_clock_test PRIVATE cxx_std_17)
+  target_include_directories(simulation_hold_clock_test PRIVATE include)
+  add_test(NAME simulation_hold_clock_test COMMAND simulation_hold_clock_test)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
   # comment the line when a copyright and license is added to all source files

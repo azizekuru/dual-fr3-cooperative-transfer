@@ -11,12 +11,16 @@ from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('headless', default_value='false'),
+        DeclareLaunchArgument('optimize_shelf_route', default_value='false', choices=['true', 'false']),
+        DeclareLaunchArgument('optimize_table_transfer', default_value='false',
+                              choices=['true', 'false']),
         DeclareLaunchArgument('right_stage', default_value='pick',
                               choices=['pick', 'shelf_hold', 'shelf_place', 'left_park']),
         DeclareLaunchArgument('table_only', default_value='false',
@@ -57,10 +61,14 @@ def setup(context):
     left_task = Node(package='fr3_cooperative_control', executable='single_arm_pick_test',
                      name='single_arm_pick_test', output='screen',
                      condition=UnlessCondition(table_only),
-                     parameters=parameters + [{'stage': 'place'}])
+                     parameters=parameters + [{'stage': 'place',
+                         'optimize_table_transfer': ParameterValue(
+                             LaunchConfiguration('optimize_table_transfer'), value_type=bool)}])
     right_task = Node(package='fr3_cooperative_control', executable='right_arm_table_pick',
                       name='right_arm_table_pick', output='screen',
-                      parameters=parameters + [{'stage': right_stage, 'left_placed': left_placed}])
+                      parameters=parameters + [{'stage': right_stage, 'left_placed': left_placed,
+                          'optimize_shelf_route': ParameterValue(
+                              LaunchConfiguration('optimize_shelf_route'), value_type=bool)}])
 
     def after_left(event, context):
         if event.returncode == 0:

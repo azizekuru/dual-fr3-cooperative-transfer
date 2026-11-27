@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "description": "Initial IK guesses from successful physical place tests. Never stored trajectories; every motion is revalidated.",
+  "joint_order": [
+    "left_fr3v2_joint1",
+    "left_fr3v2_joint2",
+    "left_fr3v2_joint3",
+    "left_fr3v2_joint4",
+    "left_fr3v2_joint5",
+    "left_fr3v2_joint6",
+    "left_fr3v2_joint7"
+  ],
+  "cells": [
+    {
+      "shelf": 1,
+      "row": 4,
+      "col": 1,
+      "stages": [
+        "transfer",
+        "place"
+      ],
+      "source_xyz": [
+        -0.1425,
+        -1.04,
+        0.325
+      ],
+      "cube_side": 0.04,
+      "lift": 0.04,
+      "approach": 0.08,
+      "withdraw": 0.08,
+      "seeds": [
+        {
+          "id": "staged_approach_full_transfer_roll1",
+          "roll_pi": 1,
+          "joints": [
+            -0.05372,
+            -0.516897,
+            -2.077002,
+            -2.858519,
+            -0.575384,
+            4.44617,
+            0.421754
+          ],
+          "validation_record": "log/compartment_full_staged_approach_forced_3.log"
+        },
+        {
+          "id": "table_route_place_roll1",
+          "roll_pi": 1,
+          "joints": [
+            -0.123376,
+            -0.581499,
+            -2.007061,
+            -2.867821,
+            -0.566503,
+            4.411354,
+            0.353347
+          ],
+          "validation_record": "log/compartment_table_route_r4c1_place_2.log"
+        },
+        {
+          "id": "full_transfer_305556_roll1",
+          "roll_pi": 1,
+          "joints": [
+            0.080396,
+            -0.430062,
+            -2.211545,
+            -2.845258,
+            -0.582481,
+            4.496662,
+            0.517988
+          ],
+          "validation_record": "/home/azize/.ros/log/2026-11-26-21-40-39-646730-DESKTOP-08MFA3P-305527/launch.log"
+        },
+        {
+          "id": "full_transfer_310705_roll1",
+          "roll_pi": 1,
+          "joints": [
+            -0.163214,
+            -0.627403,
+            -1.966965,
+            -2.87425,
+            -0.55837,
+            4.387651,
+            0.305407
+          ],
+          "validation_record": "/home/azize/.ros/log/2026-11-26-21-51-33-868342-DESKTOP-08MFA3P-310683/launch.log"
+        }
+      ]
+    },
+    {
+      "shelf": 1,
+      "row": 4,
+      "col": 2,
+      "source_xyz": [
+        0.1425,
+        -1.04,
+        0.325
+      ],
+      "cube_side": 0.04,
+      "lift": 0.04,
+      "approach": 0.08,
+      "withdraw": 0.08,
+      "seeds": [
+        {
+          "id": "place_trial_1_roll0",
+          "roll_pi": 0,
+          "joints": [
+            0.167676,
+            0.633045,
+            -1.179128,
+            -2.875031,
+            0.557266,
+            4.384791,
+            -1.870329
+          ],
+          "validation_record": "cf64c0ea-856d-4621-9c2f-e308b3ec9977"
+        },
+        {
+          "id": "place_trial_3_roll0",
+          "roll_pi": 0,
+          "joints": [
+            0.093902,
+            0.552031,
+            -1.104921,
+            -2.863621,
+            0.570926,
+            4.427006,
+            -1.955156
+          ],
+          "validation_record": "dcce0142-df38-41c9-85e5-7311e2eaf7d7"
+        },
+        {
+          "id": "place_trial_2_roll1",
+          "roll_pi": 1,
+          "joints": [
+            -0.396365,
+            0.324599,
+            -0.612843,
+            -2.82595,
+            0.581869,
+            4.571338,
+            0.913608
+          ],
+          "validation_record": "b8fdad9d-7dbb-4674-9e6c-3fc1c7855a74"
+        }
+      ]
+    }
+  ]
+}

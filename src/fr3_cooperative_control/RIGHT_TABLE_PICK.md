@@ -299,3 +299,46 @@ Sol yaklaşımda örneklenen en büyük göreli kayma 5.465 mm, iniş öncesi en
 ayrı bir iyileştirme konusudur; bu sürüm kaymasız taşıma garantisi vermez.
 Bu sonuçlar yalnızca test edilen sahne ve koşullar içindir. İki değişikliğin ayrı ayrı
 başarıya etkisi kontrollü bir karşılaştırmayla ölçülmemiştir.
+
+## Genişletilmiş doğrulama: 30 tam aktarım
+
+Sürüm: 76ff6a6. Aynı sahne ve ayarlarla paylaşılan 30 denemenin tamamı
+FULL TRANSFER TEST PASSED ile tamamlandı (gözlenen başarı 30/30).
+Başarı mesajlarının özet çıktılarda tekrar görünmesi ayrı deneme sayılmadı.
+
+| Ölçüt | Sonuç |
+|---|---|
+| Başarılı tam aktarım | 30/30 |
+| Ortalama gerçek süre | 237 s (3 dk 57 sn) |
+| Süre aralığı | 209–278 s |
+| Son raf XY hatası aralığı | 0.035–2.100 mm |
+| Rafta bırakma kayması aralığı | 0.002–0.218 mm |
+| Raporlanan son raf eğimi | Tüm denemelerde 0.000 derece |
+
+Deneme sırasına göre süreler (s):
+278, 264, 264, 254, 257, 268, 269, 238, 234, 228,
+234, 265, 236, 209, 225, 219, 215, 220, 237, 213,
+225, 233, 228, 228, 229, 214, 236, 226, 230, 234.
+
+Süre, komut başlangıcından başarı mesajına kadar gerçek geçen zamandır.
+Simülasyon açılışı dahildir, kapatma dahil değildir. Süre satırı awk tarafından
+tee sonrasında üretildiği için ham log dosyasında bulunmayabilir; bu değerler
+paylaşılan terminal çıktılarından alınmıştır.
+
+Bu seri sabit sahnede tekrarlanabilirliği değerlendirir. Farklı nesne konumları,
+kütleler ve sürtünme koşulları bu sonuçlarla doğrulanmış sayılmaz. Gözlenen %100
+başarı genel başarı garantisi değildir. Ana taşıma sırasında örneklenen göreli
+kayma (önceki seride en fazla 13.615 mm) ve yaklaşık 2 mm tekrarlayan hedef
+ofseti geliştirmeye açık kalır. Hareket içindeki kayma, bırakma sonrasındaki
+kaymadan ayrı bir ölçüttür.
+
+### Danışman görüşmesi için sonuç özeti
+
+İki FR3 kolu nesneyi birinci raftan ikinci rafa masa üzerinden sırayla aktarır.
+Sol kol ilk raftan alıp masaya bırakır; sol kol uzaklaştıktan sonra sağ kol
+masadan alıp ikinci rafa yerleştirir. Kollar nesneyi havada birbirine teslim etmez.
+Gazebo fiziksel temas, nesne pozu ve kavrama kontrollerini sağlar; MoveIt hareket
+planlama ve çarpışma kontrolünde kullanılır. Son yaklaşım hızı ve raf aramasının
+aday sırası düzenlendikten sonra aynı sürümde 30/30 tam aktarım tamamlandı.
+Sonraki çalışma için nesne başlangıç konumu çeşitliliği, ana taşımadaki kaymanın
+azaltılması ve hareket sürelerinin aşamalar bazında ölçülmesi değerlendirilebilir.

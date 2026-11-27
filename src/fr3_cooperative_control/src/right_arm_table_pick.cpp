@@ -23,6 +23,7 @@
 #include <moveit/robot_state/cartesian_interpolator.hpp>
 #include <moveit/trajectory_processing/time_optimal_trajectory_generation.hpp>
 #include <moveit_msgs/srv/get_planning_scene.hpp>
+#include <moveit_msgs/msg/position_constraint.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
@@ -53,6 +54,19 @@ public:
   explicit RightTablePick(rclcpp::Node::SharedPtr node)
   : node_(node)
   {
+    if (node_->has_parameter("destination_xyz")) {
+      const auto xyz = node_->get_parameter("destination_xyz").as_double_array();
+      require(xyz.size() == 3 && std::all_of(xyz.begin(), xyz.end(),
+          [](double v) {return std::isfinite(v);}), "Invalid destination coordinates");
+      destination_ = Eigen::Vector3d(xyz[0], xyz[1], xyz[2]);
+      require(destination_.z() >= 0.50 && destination_.z() <= 0.90,
+        "Destination height outside initial compartment test range");
+      compartment_destination_ = true;floor_z_ = destination_.z() - 0.02;
+      board_token_ = node_->get_parameter("destination_board_token").as_string();
+      support_link_ = node_->get_parameter("destination_support_link").as_string();
+      require(!board_token_.empty() && support_link_ == "destination_support_link",
+        "Invalid destination support identity");
+    }
     poses_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
       "/target_box/pose", rclcpp::SensorDataQoS(),
       [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) {
@@ -90,8 +104,8 @@ public:
           }
           const bool table = a.find("table_top_collision") != std::string::npos ||
           b.find("table_top_collision") != std::string::npos;
-          const bool board = a.find("shelf_2_level_2_collision") != std::string::npos ||
-          b.find("shelf_2_level_2_collision") != std::string::npos;
+          const bool board = a.find(board_token_) != std::string::npos ||
+          b.find(board_token_) != std::string::npos;
           bool vertical = false;double depth = 0;
           for (const auto & n : c.normals) {vertical = vertical || std::abs(n.z) > 0.8;}
           for (double d : c.depths) {depth = std::max(depth, d);}
@@ -148,8 +162,8 @@ public:
           }
           const bool box = a.find("target_box") != std::string::npos ||
           b.find("target_box") != std::string::npos;
-          const bool board = a.find("shelf_2_level_2_collision") != std::string::npos ||
-          b.find("shelf_2_level_2_collision") != std::string::npos;
+          const bool board = a.find(board_token_) != std::string::npos ||
+          b.find(board_token_) != std::string::npos;
           bool vertical = false;double depth = 0;
           for (const auto & n : c.normals) {vertical = vertical || std::abs(n.z) > 0.8;}
           for (double d : c.depths) {depth = std::max(depth, d);}
@@ -290,12 +304,12 @@ public:
     Pose shelf = high;
     shelf.orientation.x = -0.5;shelf.orientation.y = -0.5;
     shelf.orientation.z = -0.5;shelf.orientation.w = 0.5;
-    const Eigen::Vector3d desired_center(0, rack_y_ - 0.28, 0.5625);
+    const Eigen::Vector3d desired_center = shelfCenter(0.10, 0.12);
     const Eigen::Vector3d target = desired_center - rotation(shelf) * reference;
     shelf.position.x = target.x();shelf.position.y = target.y();shelf.position.z = target.z();
     arm_->setMaxVelocityScalingFactor(0.10);arm_->setMaxAccelerationScalingFactor(0.10);
-    RCLCPP_INFO(node_->get_logger(),
-        "RIGHT SHELF TRANSFER START: box target=(0.000, %.3f, 0.5625)", desired_center.y());
+    RCLCPP_INFO(node_->get_logger(), "RIGHT SHELF TRANSFER START: box target=(%.3f, %.3f, %.4f)",
+      desired_center.x(), desired_center.y(), desired_center.z());
     arm_->setPoseTarget(shelf);executePlan();arm_->clearPoseTargets();waitAt(&shelf, 0.0015, 0.005);
     holdAt("RIGHT SHELF FRONT", reference, reference_angle, drift, angle);
     const auto shelf_box = freshBox();
@@ -310,6 +324,13 @@ public:
   }
 
 private:
+  Eigen::Vector3d shelfCenter(double above_floor = 0.02, double front_offset = 0.0) const
+  {
+    return {compartment_destination_ ? destination_.x() : 0.0,
+      (compartment_destination_ ? destination_.y() : rack_y_ - 0.16) - front_offset,
+      floor_z_ + above_floor};
+  }
+
   Eigen::Quaterniond nearestCubeRotation(const Eigen::Quaterniond & current)
   {
     std::array<int, 3> order = {0, 1, 2};double best_error = 10;
@@ -390,7 +411,7 @@ private:
       for (size_t i = 0; i < trajectory.getWayPointCount(); ++i) {
         const auto & waypoint = trajectory.getWayPoint(i);
         margin = std::min(margin, jointLimitMargin(waypoint, group));
-        if (margin < 0.05 || scene.isStateColliding(waypoint, "arm_2")) {
+        if (margin < 0.05 || scene.isStateColliding(waypoint, compartment_destination_ ? "" : "arm_2")) {
           valid = false;
           break;
         }
@@ -438,7 +459,7 @@ private:
       const Eigen::Matrix3d rotation = tcp.linear() * relative_angle.toRotationMatrix();
       max_y = std::max(max_y, center.y());
       min_bottom = std::min(min_bottom, center.z() - 0.02 * rotation.row(2).cwiseAbs().sum());
-      if (!state.satisfiesBounds(group) || scene.isStateColliding(state, "arm_2")) {
+      if (!state.satisfiesBounds(group) || scene.isStateColliding(state, compartment_destination_ ? "" : "arm_2")) {
         return false;
       }
     }
@@ -456,19 +477,22 @@ private:
     auto scene = std::make_shared<planning_scene::PlanningScene>(arm_->getRobotModel());
     require(scene->setPlanningSceneMsg(planningSceneSnapshot()), "Shelf probe scene import failed");
     auto seating_scene = scene->diff();
-    seating_scene->getAllowedCollisionMatrixNonConst().setEntry("target_box", "shelf_2_link", true);
+    seating_scene->getAllowedCollisionMatrixNonConst().setEntry("target_box", support_link_, true);
     const auto * group = scene->getRobotModel()->getJointModelGroup("arm_2");
     const auto valid = [this, &seating_scene](moveit::core::RobotState * state,
       const moveit::core::JointModelGroup * joints, const double * values) {
         state->setJointGroupPositions(joints, values);
         state->update();
         return jointLimitMargin(*state, joints) >= 0.05 &&
-               !seating_scene->isStateColliding(*state, "arm_2");
+               !seating_scene->isStateColliding(*state, compartment_destination_ ? "" : "arm_2");
       };
     const double half = std::sqrt(0.5);
     const std::array<Eigen::Quaterniond, 3> nominal = {
       Eigen::Quaterniond(0.5, -0.5, -0.5, -0.5),
       Eigen::Quaterniond(0.5, -0.5, 0.5, 0.5), Eigen::Quaterniond(0, half, half, 0)};
+    const auto diagnostic_variant = node_->get_parameter_or<int64_t>(
+      "compartment_shelf_orientation_variant", -1);
+    require(diagnostic_variant >= -1 && diagnostic_variant < 3, "Invalid shelf diagnostic orientation");
     // Planning only: the held box has not moved yet. If the first search finds no
     // accepted approach, search once more with fresh random IK seeds.
     for (int pass = 0; pass < 2; ++pass) {
@@ -482,6 +506,8 @@ private:
       // All variants share the existing per-pass time budget and safety checks.
       for (int attempt = 0; attempt < 16 && Wall::now() < deadline; ++attempt) {
         for (size_t variant = 0; variant < nominal.size() && Wall::now() < deadline; ++variant) {
+          if (compartment_destination_ && diagnostic_variant >= 0 &&
+            static_cast<int64_t>(variant) != diagnostic_variant) {continue;}
           RCLCPP_INFO(node_->get_logger(),
             "SHELF SEARCH CANDIDATE: pass=%d seed=%d variant=%zu",
             pass + 1, attempt + 1, variant);
@@ -489,7 +515,7 @@ private:
             relative_angle.inverse();
           Eigen::Isometry3d end = Eigen::Isometry3d::Identity();
           end.linear() = q.toRotationMatrix();
-          end.translation() = Eigen::Vector3d(0, rack_y_ - 0.16, 0.4827) - q * relative;
+          end.translation() = shelfCenter(0.0202) - q * relative;
           Eigen::Isometry3d above = end;
           above.translation().z() += 0.0798;
           Eigen::Isometry3d front = above;
@@ -497,6 +523,9 @@ private:
           auto state = scene->getCurrentState();
           if (attempt > 0 || pass > 0) {state.setToRandomPositions(group);}
           if (!state.setFromIK(group, end, tcp_, 0.08, valid)) {continue;}
+          state.update();
+          if (compartment_destination_ &&
+            !probeCompartmentRetreat(*seating_scene, state, relative_angle)) {continue;}
           std::vector<moveit::core::RobotStatePtr> reverse;
           const EigenSTL::vector_Isometry3d waypoints = {above, front};
           const double fraction = moveit::core::CartesianInterpolator::computeCartesianPath(
@@ -511,23 +540,96 @@ private:
             Eigen::Vector3d(0.0, rack_y_ - 0.56, 0.64),
             Eigen::Vector3d(0.10, rack_y_ - 0.56, 0.64),
             Eigen::Vector3d(-0.10, rack_y_ - 0.56, 0.64)};
+          const bool optimize = node_->has_parameter("optimize_shelf_route") &&
+            node_->get_parameter("optimize_shelf_route").as_bool();
+          bool found = false;
+          double best_duration = std::numeric_limits<double>::infinity();
+          auto comparison_deadline = deadline;
           for (const auto & center : midpoint_centers) {
+            if (found && Wall::now() >= comparison_deadline) {break;}
             if (Wall::now() >= deadline) {break;}
             auto midpoint = front;
             midpoint.translation() = center - q * relative;
+            if (compartment_destination_) {midpoint.translation().x() += destination_.x();}
+            ShelfTransfer candidate;
             if (planShelfTransfer(*scene, *reverse.back(), midpoint, relative, relative_angle,
-                transfer))
+                candidate))
             {
               RCLCPP_INFO(node_->get_logger(),
                 "SHELF TWO-STAGE PLAN PASSED: pass=%d variant=%zu midpoint_box=(%.3f, %.3f, %.3f)",
-                pass + 1, variant, center.x(), center.y(), center.z());
-              return q;
+                pass + 1, variant, center.x() + (compartment_destination_ ? destination_.x() : 0),
+                center.y(), center.z());
+              const auto duration = [](const auto & trajectory) {
+                  if (trajectory.joint_trajectory.points.empty()) {
+                    return std::numeric_limits<double>::infinity();
+                  }
+                  const auto & t = trajectory.joint_trajectory.points.back().time_from_start;
+                  return static_cast<double>(t.sec) + t.nanosec * 1e-9;
+                };
+              const double seconds = duration(candidate.turn.trajectory) + duration(candidate.advance);
+              if (!found) {comparison_deadline = std::min(deadline, Wall::now() + 2s);}
+              if (seconds < best_duration) {
+                transfer = std::move(candidate);
+                best_duration = seconds;
+              }
+              found = true;
+              RCLCPP_INFO(node_->get_logger(),
+                "SHELF ROUTE SCORE: candidate=%.3f s best=%.3f s optimize=%d",
+                seconds, best_duration, optimize);
+              if (!optimize) {return q;}
             }
           }
+          if (found) {return q;}
         }
       }
     }
     throw std::runtime_error("No collision-checked two-stage shelf placement approach found");
+  }
+
+  bool compartmentMotionValid(const planning_scene::PlanningScene & scene,
+    const robot_trajectory::RobotTrajectory & trajectory)
+  {
+    for (size_t i = 0; i < trajectory.getWayPointCount(); ++i) {
+      const auto & state = trajectory.getWayPoint(i);
+      if (jointLimitMargin(state, state.getJointModelGroup("arm_2")) < 0.05 ||
+        scene.isStateColliding(state)) {return false;}
+    }
+    return trajectory.getWayPointCount() > 1;
+  }
+
+  bool probeCompartmentRetreat(const planning_scene::PlanningScene & scene,
+    const moveit::core::RobotState & end, const Eigen::Quaterniond & relative_angle)
+  {
+    planning_scene::PlanningScene released(arm_->getRobotModel());
+    moveit_msgs::msg::PlanningScene snapshot;scene.getPlanningSceneMsg(snapshot);
+    require(released.setPlanningSceneMsg(snapshot), "Compartment release probe import failed");
+    auto open = end;open.clearAttachedBody("target_box");
+    open.setVariablePosition("right_fr3v2_finger_joint1", 0.04);
+    open.setVariablePosition("right_fr3v2_finger_joint2", 0.04);open.update();
+    released.setCurrentState(open);
+    moveit_msgs::msg::CollisionObject cube;cube.id = "target_box";
+    cube.header.frame_id = "world";cube.operation = cube.ADD;
+    shape_msgs::msg::SolidPrimitive shape;shape.type = shape.BOX;shape.dimensions = {0.04, 0.04, 0.04};
+    cube.primitives.push_back(shape);
+    Pose box;box.position.x = shelfCenter().x();box.position.y = shelfCenter().y();
+    box.position.z = shelfCenter().z();
+    const Eigen::Quaterniond q = Eigen::Quaterniond(end.getGlobalLinkTransform(tcp_).linear()) * relative_angle;
+    box.orientation.w = q.w();box.orientation.x = q.x();
+    box.orientation.y = q.y();box.orientation.z = q.z();cube.primitive_poses.push_back(box);
+    if (!released.processCollisionObjectMsg(cube)) {return false;}
+    const auto & tcp = open.getGlobalLinkTransform(tcp_);
+    Pose retreat;retreat.position.x = tcp.translation().x();
+    retreat.position.y = tcp.translation().y() - 0.12;retreat.position.z = tcp.translation().z();
+    const Eigen::Quaterniond hand(tcp.linear());
+    retreat.orientation.w = hand.w();retreat.orientation.x = hand.x();
+    retreat.orientation.y = hand.y();retreat.orientation.z = hand.z();
+    std::vector<moveit::core::RobotStatePtr> path;
+    if (!checkedFinePath(released, open, retreat, false, path)) {return false;}
+    robot_trajectory::RobotTrajectory timed(arm_->getRobotModel(), "arm_2");
+    for (const auto & waypoint : path) {timed.addSuffixWayPoint(*waypoint, 0);}
+    if (!timeWithRetry(timed, 0.10, true) || !compartmentMotionValid(released, timed)) {return false;}
+    RCLCPP_INFO(node_->get_logger(), "COMPARTMENT RIGHT RETREAT PROBE PASSED");
+    return true;
   }
 
   bool planShelfTransfer(
@@ -570,12 +672,43 @@ private:
     if (!arm_->setJointValueTarget(joints)) {return false;}
 
     bool planned = planDirectShelfTurn(scene, finish, relative, relative_angle, transfer.turn);
+    if (!planned && compartment_destination_) {
+      // Constrain a link inside arm_2; the TCP is a fixed descendant outside
+      // that group. Express the held-box center in this link's frame.
+      const std::string link = "right_fr3v2_link8";
+      const auto & links = group->getLinkModelNames();
+      require(std::find(links.begin(), links.end(), link) != links.end(),
+        "Shelf turn constraint link is outside arm_2");
+      const Eigen::Vector3d offset =
+        (start.getGlobalLinkTransform(link).inverse() * start.getGlobalLinkTransform(tcp_)) * relative;
+      const double min_z = 0.48 + 0.02 * std::sqrt(3.0);
+      const double max_y = rack_y_ - 0.40;
+      moveit_msgs::msg::PositionConstraint region;
+      region.header.frame_id = "world";region.link_name = link;region.weight = 1.0;
+      region.target_point_offset.x = offset.x();
+      region.target_point_offset.y = offset.y();
+      region.target_point_offset.z = offset.z();
+      shape_msgs::msg::SolidPrimitive bounds;bounds.type = bounds.BOX;
+      bounds.dimensions = {4.0, max_y + 2.0, 2.0 - min_z};
+      Pose center;center.orientation.w = 1.0;
+      center.position.y = (max_y - 2.0) * 0.5;
+      center.position.z = (2.0 + min_z) * 0.5;
+      region.constraint_region.primitives.push_back(bounds);
+      region.constraint_region.primitive_poses.push_back(center);
+      moveit_msgs::msg::Constraints constraints;
+      constraints.position_constraints.push_back(region);
+      arm_->setPathConstraints(constraints);
+      RCLCPP_INFO(node_->get_logger(),
+        "SHELF TURN SEARCH REGION: link=%s box_center_y<=%.4f m box_center_z>=%.4f m",
+        link.c_str(), max_y, min_z);
+    }
     for (int route = 0; !planned && route < 3; ++route) {
       arm_->setStartState(start);
       if (arm_->plan(transfer.turn) != moveit::core::MoveItErrorCode::SUCCESS) {continue;}
       planned = checkShelfTransfer(transfer.turn.trajectory, scene, relative, relative_angle,
           rack_y_ - 0.40, "turn");
     }
+    if (compartment_destination_) {arm_->clearPathConstraints();}
     arm_->setStartStateToCurrentState();
     if (!planned) {return false;}
 
@@ -629,28 +762,136 @@ private:
     return true;
   }
 
-  bool onShelf()
+  struct ShelfSupportSample
+  {
+    bool box_recent = false, surface_recent = false, clock_recent = false;
+    double box_age = -1, surface_age = -1, sim_age = -1;
+  };
+
+  bool onShelf(ShelfSupportSample * sample = nullptr)
   {
     safe();std::lock_guard<std::mutex> lock(mutex_);
-    return Wall::now() - shelf_box_wall_ < 1s && Wall::now() - shelf_surface_wall_ < 1s &&
-           node_->now().nanoseconds() - shelf_sim_ < 250000000;
+    const auto now = Wall::now();
+    ShelfSupportSample status;
+    status.box_recent = now - shelf_box_wall_ < 1s;
+    status.surface_recent = now - shelf_surface_wall_ < 1s;
+    status.clock_recent = node_->now().nanoseconds() - shelf_sim_ < 250000000;
+    if (shelf_box_wall_ != Wall::time_point{}) {
+      status.box_age = std::chrono::duration<double>(now - shelf_box_wall_).count();
+    }
+    if (shelf_surface_wall_ != Wall::time_point{}) {
+      status.surface_age = std::chrono::duration<double>(now - shelf_surface_wall_).count();
+    }
+    if (shelf_sim_) {status.sim_age = (node_->now().nanoseconds() - shelf_sim_) * 1e-9;}
+    if (sample) {*sample = status;}
+    return status.box_recent && status.surface_recent && status.clock_recent;
   }
-  void waitShelfSupport()
+  void waitShelfSupport(bool allow_reseat = false)
   {
     const auto end = Wall::now() + 15s;int64_t since = -1;
+    auto next_log = Wall::now();
+    auto next_reseat = Wall::now() + 700ms;
+    std::array<int, 5> rejected{};int samples = 0, resets = 0, previous_reason = -1;
+    double max_gap = 0, max_tilt = 0, longest = 0;
     while (Wall::now() < end) {
       const auto box = freshBox();const auto now = node_->now().nanoseconds();
-      const bool good = onShelf() && std::abs(bottom(box) - 0.4625) < 0.001 && tilt(box) < 0.00873;
+      ShelfSupportSample status;const bool contact = onShelf(&status);
+      const double gap = bottom(box) - floor_z_, face_tilt = tilt(box);
+      if (compartment_destination_ && allow_reseat) {
+        require(gap > -0.0003, "Shelf reseating penetration too large; refusing opening");
+      }
+      const bool gap_ok = std::abs(gap) < 0.001, tilt_ok = face_tilt < 0.00873;
+      const bool good = contact && gap_ok && tilt_ok;
+      const std::array<bool, 5> bad = {!status.box_recent, !status.surface_recent,
+        !status.clock_recent, !gap_ok, !tilt_ok};
+      int reason = 0;++samples;
+      for (size_t i = 0; i < bad.size(); ++i) {
+        if (bad[i]) {++rejected[i];reason |= 1 << i;}
+      }
+      if (!good && since >= 0) {++resets;}
+      const double held = since < 0 ? 0 : (now - since) * 1e-9;
+      if (good) {longest = std::max(longest, held);}
+      max_gap = std::max(max_gap, std::abs(gap));max_tilt = std::max(max_tilt, face_tilt);
+      if (compartment_destination_ && (Wall::now() >= next_log || reason != previous_reason)) {
+        RCLCPP_INFO(node_->get_logger(),
+          "SHELF SUPPORT CHECK: box=%d surface=%d clock=%d gap=%.4f mm tilt=%.4f deg "
+          "box_age=%.3f s surface_age=%.3f s sim_age=%.3f s held=%.3f s resets=%d reason=%d",
+          status.box_recent, status.surface_recent, status.clock_recent, gap * 1000,
+          face_tilt * 180 / M_PI, status.box_age, status.surface_age, status.sim_age,
+          good ? held : 0.0, resets, reason);
+        next_log = Wall::now() + 500ms;
+      }
+      previous_reason = reason;
+      // A briefly seated cube can rebound into the still-closed fingers.
+      // Correct only a measured small positive gap, never a tilted cube or
+      // missing sensor data alone. Opening still requires the original support window.
+      if (compartment_destination_ && allow_reseat && !contact && tilt_ok &&
+        gap > 0.00002 && gap <= 0.0003 && shelf_reseat_steps_ < 3 && Wall::now() >= next_reseat) {
+        const auto hand = arm_->getCurrentPose(tcp_).pose;
+        syncHeldBox(box, hand);
+        Pose target = hand;const double step = std::min(0.00015, gap + 0.00005);
+        target.position.z -= step;
+        RCLCPP_WARN(node_->get_logger(),
+          "SHELF RESEAT: step=%d/3 downward=%.4f mm gap=%.4f mm; gripper remains closed",
+          ++shelf_reseat_steps_, step * 1000, gap * 1000);
+        linear(target, 0.01, LinearMode::shelf_descent);waitAt(&target, 0.00015, 0.0015);
+        since = -1;next_reseat = Wall::now() + 700ms;continue;
+      }
       if (!good) {since = -1;} else if (since < 0) {
         since = now;
       } else if (now - since >= 1000000000) {
         RCLCPP_INFO(node_->get_logger(), "SHELF SUPPORT VERIFIED: 1 sim s bottom_gap=%.3f mm",
-          (bottom(box) - 0.4625) * 1000);return;
+          (bottom(box) - floor_z_) * 1000);return;
       }
       std::this_thread::sleep_for(100ms);
     }
+    RCLCPP_ERROR(node_->get_logger(),
+      "SHELF SUPPORT FAILED: samples=%d box_expired=%d surface_expired=%d clock_expired=%d "
+      "gap_outside=%d tilt_outside=%d max_abs_gap=%.4f mm max_tilt=%.4f deg longest_good=%.3f s resets=%d",
+      samples, rejected[0], rejected[1], rejected[2], rejected[3], rejected[4], max_gap * 1000,
+      max_tilt * 180 / M_PI, longest, resets);
     throw std::runtime_error("Target shelf support/level not verified; refusing opening");
   }
+  void logShelfRoute(const moveit_msgs::msg::RobotTrajectory & plan, const char * phase)
+  {
+    const auto & trajectory = plan.joint_trajectory;
+    if (trajectory.points.empty()) {return;}
+    const auto & stamp = trajectory.points.back().time_from_start;
+    RCLCPP_INFO(node_->get_logger(),
+      "SHELF SELECTED ROUTE: phase=%s planned=%.3f s points=%zu", phase,
+      static_cast<double>(stamp.sec) + stamp.nanosec * 1e-9, trajectory.points.size());
+    for (size_t joint = 0; joint < trajectory.joint_names.size(); ++joint) {
+      double travel = 0.0;
+      for (size_t i = 1; i < trajectory.points.size(); ++i) {
+        travel += std::abs(trajectory.points[i].positions[joint] -
+          trajectory.points[i - 1].positions[joint]);
+      }
+      const double net = std::abs(trajectory.points.back().positions[joint] -
+        trajectory.points.front().positions[joint]);
+      RCLCPP_INFO(node_->get_logger(),
+        "SHELF JOINT TRAVEL: phase=%s joint=%s total=%.4f rad net=%.4f rad excess=%.4f rad",
+        phase, trajectory.joint_names[joint].c_str(), travel, net, travel - net);
+    }
+    auto current = arm_->getCurrentState(2.0);
+    if (!current) {
+      RCLCPP_WARN(node_->get_logger(), "SHELF TCP PATH: state unavailable for diagnostics");
+      return;
+    }
+    moveit::core::RobotState state(*current);
+    Eigen::Vector3d first = Eigen::Vector3d::Zero(), previous = first;
+    double length = 0.0;
+    for (size_t i = 0; i < trajectory.points.size(); ++i) {
+      state.setVariablePositions(trajectory.joint_names, trajectory.points[i].positions);
+      state.update();
+      const Eigen::Vector3d position = state.getGlobalLinkTransform(tcp_).translation();
+      if (i == 0) {first = position;} else {length += (position - previous).norm();}
+      previous = position;
+    }
+    RCLCPP_INFO(node_->get_logger(),
+      "SHELF TCP PATH: phase=%s length=%.4f m displacement=%.4f m",
+      phase, length, (previous - first).norm());
+  }
+
   void executeShelfTransfer(
     const moveit_msgs::msg::RobotTrajectory & plan, const Eigen::Vector3d & relative,
     const Eigen::Quaterniond & relative_angle)
@@ -693,6 +934,7 @@ private:
   }
   void placeOnShelf(const Eigen::Vector3d & reference, const Eigen::Quaterniond & reference_angle)
   {
+    shelf_reseat_steps_ = 0;
     auto box = stableBox();auto hand = arm_->getCurrentPose(tcp_).pose;
     syncHeldBox(box, hand);
     Eigen::Vector3d relative = rotation(hand).inverse() * (point(box) - point(hand));
@@ -703,6 +945,8 @@ private:
     arm_->setPlanningTime(2.0);
     ShelfTransfer transfer;
     Eigen::Quaterniond aligned = chooseShelfApproach(relative, relative_angle, transfer);
+    logShelfRoute(transfer.turn.trajectory, "turn");
+    logShelfRoute(transfer.advance, "advance");
     RCLCPP_INFO(node_->get_logger(), "SHELF TRANSFER TURN START");
     executeShelfTransfer(transfer.turn.trajectory, relative, relative_angle);
     waitAt(&transfer.midpoint, 0.001, 0.005);
@@ -721,8 +965,7 @@ private:
       }
       goal = hand;goal.orientation.w = aligned.w();goal.orientation.x = aligned.x();
       goal.orientation.y = aligned.y();goal.orientation.z = aligned.z();
-      const Eigen::Vector3d target = Eigen::Vector3d(0, rack_y_ - 0.28,
-          0.5625) - aligned * relative;
+      const Eigen::Vector3d target = shelfCenter(0.10, 0.12) - aligned * relative;
       goal.position.x = target.x();goal.position.y = target.y();goal.position.z = target.z();
       RCLCPP_INFO(node_->get_logger(), "SHELF ALIGN START: correction %d/3", attempt + 1);
       if (attempt == 0) {
@@ -731,8 +974,7 @@ private:
         linear(goal, 0.01);
       }
       waitAt(&goal, 0.0003, 0.0015);box = stableBox();safe();
-      if (tilt(box) < 0.00873 && (point(box) - Eigen::Vector3d(0, rack_y_ - 0.28,
-          0.5625)).norm() < 0.001)
+      if (tilt(box) < 0.00873 && (point(box) - shelfCenter(0.10, 0.12)).norm() < 0.001)
       {
         level = true;break;
       }
@@ -742,41 +984,51 @@ private:
     holdAt("SHELF ALIGNED", reference, reference_angle, drift, angle, 1.0);
     box = freshBox();hand = arm_->getCurrentPose(tcp_).pose;syncHeldBox(box, hand);
     relative = rotation(hand).inverse() * (point(box) - point(hand));
-    Eigen::Vector3d target = Eigen::Vector3d(0, rack_y_ - 0.16, 0.5625) - aligned * relative;
+    Eigen::Vector3d target = shelfCenter(0.10) - aligned * relative;
     goal.position.x = target.x();goal.position.y = target.y();goal.position.z = target.z();
     RCLCPP_INFO(node_->get_logger(), "SHELF INSERT START: 120 mm into second shelf");
     linear(goal, 0.03);waitAt(&goal, 0.0003, 0.0015);
     box = freshBox();hand = arm_->getCurrentPose(tcp_).pose;syncHeldBox(box, hand);
-    goal.position.x = hand.position.x - box.position.x;
-    goal.position.y = hand.position.y + rack_y_ - 0.16 - box.position.y;
-    goal.position.z = hand.position.z + 0.4845 - box.position.z;
-    RCLCPP_INFO(node_->get_logger(), "SHELF DESCENT START: center z=0.4845");
+    goal.position.x = hand.position.x + shelfCenter().x() - box.position.x;
+    goal.position.y = hand.position.y + shelfCenter().y() - box.position.y;
+    goal.position.z = hand.position.z + shelfCenter(0.022).z() - box.position.z;
+    RCLCPP_INFO(node_->get_logger(), "SHELF DESCENT START: center z=%.4f", shelfCenter(0.022).z());
     linear(goal, 0.02, LinearMode::shelf_descent);waitAt(&goal, 0.0003, 0.0015);
     {std::lock_guard<std::mutex> lock(mutex_);seating_ = true;}
     configureContacts(true, false, true);
     const auto before_relax = freshBox();gripper(0.0198, true);
     box = stableBox();hand = arm_->getCurrentPose(tcp_).pose;
     RCLCPP_INFO(node_->get_logger(), "SHELF GRIP RELAX: shift=%.3f mm gap=%.3f mm",
-      (point(box) - point(before_relax)).norm() * 1000, (bottom(box) - 0.4625) * 1000);
+      (point(box) - point(before_relax)).norm() * 1000, (bottom(box) - floor_z_) * 1000);
     require((point(box) - point(before_relax)).norm() < 0.003 &&
-      bottom(box) - 0.4625 > -0.0003, "Excessive shelf seating displacement");
+      bottom(box) - floor_z_ > -0.0003, "Excessive shelf seating displacement");
     syncHeldBox(box, hand);bool seated = false;
     for (int step = 0; step < 10; ++step) {
-      box = freshBox();const double gap = bottom(box) - 0.4625;
+      box = freshBox();const double gap = bottom(box) - floor_z_;
+      const bool contact = onShelf();
       RCLCPP_INFO(node_->get_logger(), "SHELF SEAT step=%d gap=%.3f mm contact=%d", step,
-          gap * 1000, onShelf());
+          gap * 1000, contact);
       require(gap > -0.0003 && tilt(box) < 0.00873, "Shelf seating penetration/tilt too large");
+      // Small positive geometric gaps can coexist with physical support. Do not
+      // keep pressing a supported cube: require the existing dual-sensor window.
+      if (compartment_destination_ && contact && gap > 0.0 && gap <= 0.0003) {
+        RCLCPP_INFO(node_->get_logger(),
+          "SHELF CONTACT WINDOW START: gap=%.4f mm tilt=%.4f deg; gripper remains closed",
+          gap * 1000, tilt(box) * 180 / M_PI);
+        waitShelfSupport(true);seated = true;break;
+      }
       // As on the left arm: a corner touch can report contact while the face still
       // hovers. Count as seated only with contact AND a light press.
-      if (onShelf() && gap <= -0.000001) {seated = true;break;}
-      if (gap <= 0.0) {waitShelfSupport();seated = true;break;}
+      if (contact && gap <= -0.000001) {seated = true;break;}
+      if (gap <= 0.0) {waitShelfSupport(compartment_destination_);seated = true;break;}
       goal = arm_->getCurrentPose(tcp_).pose;
       goal.orientation.w = aligned.w();goal.orientation.x = aligned.x();
       goal.orientation.y = aligned.y();goal.orientation.z = aligned.z();
       goal.position.z -= std::min(0.0005, gap + 0.0001);
       linear(goal, 0.01);waitAt(&goal, 0.00015, 0.0015);
     }
-    require(seated, "Shelf support not established in bounded steps");waitShelfSupport();
+    require(seated, "Shelf support not established in bounded steps");
+    waitShelfSupport(compartment_destination_);
     const auto release_reference = freshBox();
     RCLCPP_INFO(node_->get_logger(), "SHELF OPEN: verified target board, two-step opening");
     gripper(0.021, false);waitShelfSupport();
@@ -789,29 +1041,32 @@ private:
     require(scene_->getAttachedObjects({"target_box"}).empty(), "Shelf planning detach failed");
     box = stableBox();
     release_slip = std::max(release_slip, (point(box) - point(release_reference)).norm());
-    addBox(box);goal = arm_->getCurrentPose(tcp_).pose;goal.position.z += 0.08;
-    RCLCPP_INFO(node_->get_logger(), "SHELF RETREAT CLEARANCE: raise 80 mm with open gripper");
-    linear(goal, 0.02);waitAt(&goal, 0.001, 0.005);
-    require(onShelf(), "Box lost shelf support during clearance lift");
+    addBox(box);goal = arm_->getCurrentPose(tcp_).pose;
+    if (!compartment_destination_) {
+      goal.position.z += 0.08;
+      RCLCPP_INFO(node_->get_logger(), "SHELF RETREAT CLEARANCE: raise 80 mm with open gripper");
+      linear(goal, 0.02);waitAt(&goal, 0.001, 0.005);
+      require(onShelf(), "Box lost shelf support during clearance lift");
+    }
     goal = arm_->getCurrentPose(tcp_).pose;goal.position.y -= 0.12;
-    RCLCPP_INFO(node_->get_logger(),
-        "SHELF RETREAT START: 120 mm at clearance height, no ready return");
-    linear(goal, 0.10);waitAt(&goal);  // gripper open, above box
+    RCLCPP_INFO(node_->get_logger(), "SHELF RETREAT START: 120 mm, clearance_lift=%d",
+      !compartment_destination_);
+    linear(goal, 0.10);waitAt(&goal);  // gripper open; shelf support remains monitored
     const auto sim_start = node_->now();const auto wall_start = Wall::now();
     while ((node_->now() - sim_start).seconds() < 3.0) {
       require(Wall::now() - wall_start < 30s, "Shelf post-release clock timed out");
       box = freshBox();safe();
       release_slip = std::max(release_slip, (point(box) - point(release_reference)).norm());
-      require(onShelf() && release_slip < 0.002 && std::hypot(box.position.x,
-          box.position.y - (rack_y_ - 0.16)) < 0.003 &&
-        std::abs(box.position.z - 0.4825) < 0.001 && tilt(box) < 0.01745,
+      require(onShelf() && release_slip < 0.002 &&
+        (point(box).head<2>() - shelfCenter().head<2>()).norm() < 0.003 &&
+        std::abs(box.position.z - shelfCenter().z()) < 0.001 && tilt(box) < 0.01745,
         "Shelf box shifted, tilted or lost target support after release");
       std::this_thread::sleep_for(100ms);
     }
     RCLCPP_INFO(node_->get_logger(),
       "RIGHT SHELF PLACE PASSED: box=(%.5f, %.5f, %.5f) xy_error=%.3f mm release_slip=%.3f mm tilt=%.3f deg",
       box.position.x, box.position.y, box.position.z,
-        std::hypot(box.position.x, box.position.y - (rack_y_ - 0.16)) * 1000,
+        (point(box).head<2>() - shelfCenter().head<2>()).norm() * 1000,
       release_slip * 1000, tilt(box) * 180 / M_PI);
   }
 
@@ -1035,10 +1290,11 @@ private:
     auto future = client->async_send_request(request);
     require(future.wait_for(5s) == std::future_status::ready, "Collision matrix timeout");
     auto acm = future.get()->scene.allowed_collision_matrix;
-    const std::vector<std::string> names = {"target_box", "table_link", "shelf_2_link",
+    std::vector<std::string> names = {"target_box", "table_link", "shelf_2_link",
       "left_fr3v2_leftfinger",
       "left_fr3v2_rightfinger", "left_fr3v2_hand", "right_fr3v2_leftfinger",
       "right_fr3v2_rightfinger", "right_fr3v2_hand"};
+    if (compartment_destination_) {names.push_back(support_link_);}
     for (const auto & name : names) {
       if (std::find(acm.entry_names.begin(), acm.entry_names.end(),
           name) == acm.entry_names.end())
@@ -1057,7 +1313,7 @@ private:
       const auto index = std::find(acm.entry_names.begin(), acm.entry_names.end(),
           name) - acm.entry_names.begin();
       const bool enabled = (allow_table_support && name == "table_link") ||
-        (allow_shelf_support && name == "shelf_2_link") || (allow_right &&
+        (allow_shelf_support && name == support_link_) || (allow_right &&
         (name == "right_fr3v2_leftfinger" || name == "right_fr3v2_rightfinger"));
       acm.entry_values[box].enabled[index] = enabled;acm.entry_values[index].enabled[box] = enabled;
     }
@@ -1094,8 +1350,9 @@ private:
              candidate->setJointGroupPositions(joints, values);
              candidate->update();
              return candidate->satisfiesBounds(joints) &&
-                    (!pickup || jointLimitMargin(*candidate, joints) >= pickup_joint_margin_) &&
-                    !scene.isStateColliding(*candidate, "arm_2");
+                    (!(pickup || compartment_destination_) ||
+                    jointLimitMargin(*candidate, joints) >= pickup_joint_margin_) &&
+                    !scene.isStateColliding(*candidate, compartment_destination_ ? "" : "arm_2");
            };
   }
   bool checkedFinePath(
@@ -1174,8 +1431,28 @@ private:
     planning_scene::PlanningScene scene(arm_->getRobotModel());
     require(scene.setPlanningSceneMsg(planningSceneSnapshot()),
         "Fine planning scene import failed");
+    // Preserve the scene's attachment/ACM, but start the moving arm from its
+    // latest measured joints rather than the independently sampled scene state.
+    auto measured = arm_->getCurrentState(2.0);
+    require(static_cast<bool>(measured), "Fine path measured state unavailable");
+    auto start = scene.getCurrentState();
+    const auto * group = start.getJointModelGroup("arm_2");
+    double maximum = 0.0;
+    for (const auto & name : group->getVariableNames()) {
+      const double value = measured->getVariablePosition(name);
+      const double difference = std::abs(value - start.getVariablePosition(name));
+      maximum = std::max(maximum, difference);
+      RCLCPP_INFO(node_->get_logger(),
+        "FINE START SYNC: joint=%s scene=%.6f measured=%.6f delta=%.6f rad",
+        name.c_str(), start.getVariablePosition(name), value, difference);
+      start.setVariablePosition(name, value);
+    }
+    start.update();
+    RCLCPP_INFO(node_->get_logger(), "FINE START SYNC: max_delta=%.6f rad", maximum);
+    require(start.satisfiesBounds(group) && !scene.isStateColliding(start, compartment_destination_ ? "" : "arm_2"),
+      "Measured fine path start violates bounds or collision checks");
     std::vector<moveit::core::RobotStatePtr> path;
-    require(checkedFinePath(scene, scene.getCurrentState(), target, pickup, path),
+    require(checkedFinePath(scene, start, target, pickup, path),
       "Incomplete collision-checked fine path, joint margin or jump");
     for (const auto & waypoint : path) {trajectory.addSuffixWayPoint(*waypoint, 0.0);}
   }
@@ -1236,7 +1513,7 @@ private:
         require((tcp.translation() - expected).norm() < 0.00025 &&
           Eigen::Quaterniond(tcp.rotation()).angularDistance(start_angle.slerp(ratio, end_angle)) <
           0.0015, "Shelf timing fallback deviates from Cartesian descent");
-        require(waypoint.satisfiesBounds(group) && !scene.isStateColliding(waypoint, "arm_2"),
+        require(waypoint.satisfiesBounds(group) && !scene.isStateColliding(waypoint, compartment_destination_ ? "" : "arm_2"),
           "Shelf timing fallback is not collision-free");
       }
       for (const auto & name : names) {
@@ -1280,7 +1557,7 @@ private:
     require(static_cast<bool>(state), "No trajectory state");
     robot_trajectory::RobotTrajectory trajectory(arm_->getRobotModel(), "arm_2");
     const bool pickup = mode == LinearMode::pickup;
-    const bool fine = pickup || scale <= 0.02;
+    const bool fine = pickup || scale <= 0.02 || compartment_destination_;
     if (fine) {finePath(target, trajectory, pickup);} else {
       const double fraction = arm_->computeCartesianPath({target}, 0.002, msg, true);
       if (fraction < 0.999) {
@@ -1315,7 +1592,23 @@ private:
       RCLCPP_INFO(node_->get_logger(), "TIMED JOINT %s target=%.6f", name.c_str(),
         trajectory.getLastWayPoint().getVariablePosition(name));
     }
+    if (compartment_destination_) {
+      planning_scene::PlanningScene checked(arm_->getRobotModel());
+      require(checked.setPlanningSceneMsg(planningSceneSnapshot()), "Compartment timed scene unavailable");
+      require(compartmentMotionValid(checked, trajectory),
+        "Timed compartment path lost collision clearance or joint margin");
+    }
     trajectory.getRobotTrajectoryMsg(msg);
+    auto before_execute = arm_->getCurrentState(2.0);
+    require(static_cast<bool>(before_execute), "Pre-execution state unavailable");
+    for (size_t i = 0; i < msg.joint_trajectory.joint_names.size(); ++i) {
+      const auto & name = msg.joint_trajectory.joint_names[i];
+      const double planned = msg.joint_trajectory.points.front().positions[i];
+      const double actual = before_execute->getVariablePosition(name);
+      RCLCPP_INFO(node_->get_logger(),
+        "CARTESIAN START CHECK: joint=%s planned=%.6f measured=%.6f delta=%.6f rad",
+        name.c_str(), planned, actual, std::abs(planned - actual));
+    }
     require(arm_->execute(msg) == moveit::core::MoveItErrorCode::SUCCESS,
         "Cartesian execution failed");
   }
@@ -1460,6 +1753,12 @@ private:
     require(scene_->applyCollisionObject(object), "Planning box synchronization failed");
   }
   double rack_y_ = 1.20;
+  int shelf_reseat_steps_ = 0;
+  bool compartment_destination_ = false;
+  Eigen::Vector3d destination_ = Eigen::Vector3d::Zero();
+  double floor_z_ = 0.4625;
+  std::string board_token_ = "shelf_2_level_2_collision";
+  std::string support_link_ = "shelf_2_link";
   rclcpp::Node::SharedPtr node_;
   std::mutex mutex_;
   Pose box_;size_t sequence_ = 0;int64_t stamp_ = -1, support_sim_ = 0;

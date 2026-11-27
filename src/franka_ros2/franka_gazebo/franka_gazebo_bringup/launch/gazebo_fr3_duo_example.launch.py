@@ -57,6 +57,10 @@ def get_robot_description(context: LaunchContext, load_gripper, franka_hand, wit
             'fr3_duo.gazebo.urdf.xacro'
         )
 
+    description_override = LaunchConfiguration('robot_description_file').perform(context)
+    if description_override:
+        franka_xacro_file = description_override
+
     robot_description_config = xacro.process_file(
         franka_xacro_file,
         mappings={
@@ -81,6 +85,7 @@ def get_robot_description(context: LaunchContext, load_gripper, franka_hand, wit
         output='both',
         parameters=[
             robot_description,
+            {'use_sim_time': True},
         ]
     )
 
@@ -310,6 +315,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('shelf2_y', default_value='1.20'),
+        DeclareLaunchArgument('robot_description_file', default_value=''),
         load_gripper_launch_argument,
         franka_hand_launch_argument,
         namespace_launch_argument,
